@@ -3,11 +3,13 @@ package xyz.gatoware.synapse.matrix;
 public class Matrix {
 	private int rows;
 	private int columns;
-	private float[][] values;
+	public float[][] values;
 
 	public Matrix(int rows, int columns) {
 		this.rows = rows;
 		this.columns = columns;
+
+		this.values = new float[rows][columns];
 	}
 
 	public Matrix(float[][] values) {
@@ -17,12 +19,8 @@ public class Matrix {
 		this.columns = values[0].length;
 	}
 
-	public float[][] getValues() {
-		return values;
-	}
-
 	public Matrix transpose(Matrix matrix) {
-		float[][] m = matrix.getValues();
+		float[][] m = matrix.values;
 
 		float[][] temp = new float[m[0].length][m.length];
 		for (int i = 0; i < m.length; i++)
@@ -38,7 +36,17 @@ public class Matrix {
 			throw new IllegalArgumentException("Matrix dimensions are incompatible!");
 		}
 
-		return m1;
+		final Matrix m3 = new Matrix(m1.rows, m2.columns);
+
+		for (int i = 0; i < m1.rows; i++) {
+			for (int j = 0; j < m2.columns; j++) {
+				for (int k = 0; k < m1.columns; k++) {
+					m3.values[i][j] += m1.values[i][k] * m2.values[k][j];
+				}
+			}
+		}
+
+		return m3;
 	}
 
 	public int rows() {
