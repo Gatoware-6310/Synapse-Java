@@ -38,7 +38,7 @@ public class MatrixTest {
 				{4.0f, 5.0f, 6.0f}
 		});
 
-		Matrix transposed = matrix.transpose(matrix);
+		Matrix transposed = matrix.transpose();
 
 		assertEquals(3, transposed.rows());
 		assertEquals(2, transposed.columns());
@@ -59,7 +59,7 @@ public class MatrixTest {
 				{11.0f, 12.0f}
 		});
 
-		Matrix product = left.multiply(left, right);
+		Matrix product = left.multiply(right);
 
 		assertEquals(2, product.rows());
 		assertEquals(2, product.columns());
@@ -74,7 +74,7 @@ public class MatrixTest {
 
 		IllegalArgumentException exception = assertThrows(
 				IllegalArgumentException.class,
-				() -> left.multiply(left, right));
+				() -> left.multiply(right));
 
 		assertEquals("Matrix dimensions are incompatible!", exception.getMessage());
 	}

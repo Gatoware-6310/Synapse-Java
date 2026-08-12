@@ -19,8 +19,8 @@ public class Matrix {
 		this.columns = values[0].length;
 	}
 
-	public Matrix transpose(Matrix matrix) {
-		float[][] m = matrix.values;
+	public Matrix transpose() {
+		float[][] m = this.values;
 
 		float[][] temp = new float[m[0].length][m.length];
 		for (int i = 0; i < m.length; i++)
@@ -30,18 +30,17 @@ public class Matrix {
 		return new Matrix(temp);
 	}
 
-	/* WORK IN PROGRESS */
-	public Matrix multiply(Matrix m1, Matrix m2) {
-		if (m1.columns() != m2.rows()) {
+	public Matrix multiply(Matrix m2) {
+		if (this.columns() != m2.rows()) {
 			throw new IllegalArgumentException("Matrix dimensions are incompatible!");
 		}
 
-		final Matrix m3 = new Matrix(m1.rows, m2.columns);
+		final Matrix m3 = new Matrix(this.rows, m2.columns);
 
-		for (int i = 0; i < m1.rows; i++) {
+		for (int i = 0; i < this.rows; i++) {
 			for (int j = 0; j < m2.columns; j++) {
-				for (int k = 0; k < m1.columns; k++) {
-					m3.values[i][j] += m1.values[i][k] * m2.values[k][j];
+				for (int k = 0; k < this.columns; k++) {
+					m3.values[i][j] += this.values[i][k] * m2.values[k][j];
 				}
 			}
 		}
