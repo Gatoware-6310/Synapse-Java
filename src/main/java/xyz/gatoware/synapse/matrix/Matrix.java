@@ -21,6 +21,14 @@ public class Matrix {
 		this.columns = values[0].length;
 	}
 
+	public Matrix copy() {
+		float[][] copy = new float[this.rows][this.columns];
+		for (int i = 0; i < this.rows; i++)
+			System.arraycopy(this.values[i], 0, copy[i], 0, this.columns);
+
+		return new Matrix(copy);
+	}
+
 	public Matrix transpose() {
 		float[][] m = this.values;
 
