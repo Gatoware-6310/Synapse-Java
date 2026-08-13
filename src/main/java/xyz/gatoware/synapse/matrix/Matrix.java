@@ -93,6 +93,20 @@ public class Matrix {
 		return this;
 	}
 
+	public Matrix multiply_hadamard(Matrix m2) {
+		if (this.columns() != m2.columns() || this.rows() != m2.rows()) {
+			throw new IllegalArgumentException("Matrix dimensions are incompatible!");
+		}
+
+		for (int i = 0; i < this.rows; i++) {
+			for (int j = 0; j < this.columns; j++) {
+				this.values[i][j] *= m2.values[i][j];
+			}
+		}
+
+		return this;
+	}
+
 	public int rows() {
 		return rows;
 	}

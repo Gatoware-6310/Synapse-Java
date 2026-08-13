@@ -150,4 +150,37 @@ public class MatrixTest {
 
 		assertEquals("Matrix dimensions are incompatible!", exception.getMessage());
 	}
+
+	@Test
+	void hadamardMultiplyCalculatesElementWiseProductInPlace() {
+		Matrix left = new Matrix(new float[][] {
+				{ 1.0f, 2.0f, 3.0f },
+				{ 4.0f, 5.0f, 6.0f }
+		});
+		Matrix right = new Matrix(new float[][] {
+				{ 7.0f, 8.0f, 9.0f },
+				{ 10.0f, 11.0f, 12.0f }
+		});
+
+		Matrix product = left.multiply_hadamard(right);
+
+		assertEquals(left, product);
+		assertArrayEquals(new float[] { 7.0f, 16.0f, 27.0f }, product.values[0]);
+		assertArrayEquals(new float[] { 40.0f, 55.0f, 72.0f }, product.values[1]);
+	}
+
+	@Test
+	void hadamardMultiplyRejectsIncompatibleDimensions() {
+		Matrix left = new Matrix(new float[][] { { 1.0f, 2.0f } });
+		Matrix right = new Matrix(new float[][] {
+				{ 3.0f, 4.0f },
+				{ 5.0f, 6.0f }
+		});
+
+		IllegalArgumentException exception = assertThrows(
+				IllegalArgumentException.class,
+				() -> left.multiply_hadamard(right));
+
+		assertEquals("Matrix dimensions are incompatible!", exception.getMessage());
+	}
 }
