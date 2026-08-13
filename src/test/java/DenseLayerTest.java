@@ -70,8 +70,8 @@ public class DenseLayerTest {
 				IllegalArgumentException.class,
 				() -> layer.forward(new Matrix(3, 2)));
 
-		assertEquals("Dense layer input must have dimensions 3 x 1.", wrongRows.getMessage());
-		assertEquals("Dense layer input must have dimensions 3 x 1.", wrongColumns.getMessage());
+		assertEquals("Dense layer input must have dimensions 3 x 1", wrongRows.getMessage());
+		assertEquals("Dense layer input must have dimensions 3 x 1", wrongColumns.getMessage());
 	}
 
 	private Matrix weights(DenseLayer layer) {
