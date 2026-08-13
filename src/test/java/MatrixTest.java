@@ -82,6 +82,40 @@ public class MatrixTest {
 	}
 
 	@Test
+	void subtractCalculatesElementWiseDifference() {
+		Matrix left = new Matrix(new float[][] {
+				{ 10.0f, 20.0f, 30.0f },
+				{ 40.0f, 50.0f, 60.0f }
+		});
+		Matrix right = new Matrix(new float[][] {
+				{ 1.0f, 2.0f, 3.0f },
+				{ 4.0f, 5.0f, 6.0f }
+		});
+
+		Matrix difference = left.subtract(right);
+
+		assertEquals(2, difference.rows());
+		assertEquals(3, difference.columns());
+		assertArrayEquals(new float[] { 9.0f, 18.0f, 27.0f }, difference.values[0]);
+		assertArrayEquals(new float[] { 36.0f, 45.0f, 54.0f }, difference.values[1]);
+	}
+
+	@Test
+	void subtractRejectsIncompatibleDimensions() {
+		Matrix left = new Matrix(new float[][] { { 1.0f, 2.0f } });
+		Matrix right = new Matrix(new float[][] {
+				{ 3.0f, 4.0f },
+				{ 5.0f, 6.0f }
+		});
+
+		IllegalArgumentException exception = assertThrows(
+				IllegalArgumentException.class,
+				() -> left.subtract(right));
+
+		assertEquals("Matrix dimensions are incompatible!", exception.getMessage());
+	}
+
+	@Test
 	void multiplyCalculatesMatrixProduct() {
 		Matrix left = new Matrix(new float[][] {
 				{ 1.0f, 2.0f, 3.0f },
