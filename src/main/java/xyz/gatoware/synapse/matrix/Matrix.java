@@ -27,7 +27,8 @@ public class Matrix {
 			for (int j = 0; j < m[0].length; j++)
 				temp[j][i] = m[i][j];
 
-		return new Matrix(temp);
+		this.values = temp;
+		return this;
 	}
 
 	public Matrix add(Matrix m2) {
@@ -38,15 +39,13 @@ public class Matrix {
 		int rows = this.rows();
 		int cols = this.columns();
 
-		float[][] sum = new float[rows][cols];
-
 		for (int i = 0; i < rows; i++) {
 			for (int j = 0; j < cols; j++) {
-				sum[i][j] = this.values[i][j] + m2.values[i][j];
+				this.values[i][j] += m2.values[i][j];
 			}
 		}
 
-		return new Matrix(sum);
+		return this;
 	}
 
 	public Matrix subtract(Matrix m2) {
@@ -57,15 +56,13 @@ public class Matrix {
 		int rows = this.rows();
 		int cols = this.columns();
 
-		float[][] sum = new float[rows][cols];
-
 		for (int i = 0; i < rows; i++) {
 			for (int j = 0; j < cols; j++) {
-				sum[i][j] = this.values[i][j] - m2.values[i][j];
+				this.values[i][j] -= m2.values[i][j];
 			}
 		}
 
-		return new Matrix(sum);
+		return this;
 	}
 
 	public Matrix multiply(Matrix m2) {
@@ -73,17 +70,27 @@ public class Matrix {
 			throw new IllegalArgumentException("Matrix dimensions are incompatible!");
 		}
 
-		final Matrix m3 = new Matrix(this.rows, m2.columns);
-
+		float[][] product = new float[this.rows][m2.columns];
 		for (int i = 0; i < this.rows; i++) {
 			for (int j = 0; j < m2.columns; j++) {
 				for (int k = 0; k < this.columns; k++) {
-					m3.values[i][j] += this.values[i][k] * m2.values[k][j];
+					product[i][j] += this.values[i][k] * m2.values[k][j];
 				}
 			}
 		}
 
-		return m3;
+		this.values = product;
+		this.columns = m2.columns;
+		return this;
+	}
+
+	public Matrix multiply(float scalar) {
+		for (int i = 0; i < this.rows; i++) {
+			for (int j = 0; j < this.columns; j++) {
+				this.values[i][j] *= scalar;
+			}
+		}
+		return this;
 	}
 
 	public int rows() {

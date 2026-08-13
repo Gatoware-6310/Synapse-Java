@@ -40,8 +40,9 @@ public class MatrixTest {
 
 		Matrix transposed = matrix.transpose();
 
-		assertEquals(3, transposed.rows());
-		assertEquals(2, transposed.columns());
+		assertEquals(matrix, transposed);
+		assertEquals(2, transposed.rows());
+		assertEquals(3, transposed.columns());
 		assertArrayEquals(new float[] { 1.0f, 4.0f }, transposed.values[0]);
 		assertArrayEquals(new float[] { 2.0f, 5.0f }, transposed.values[1]);
 		assertArrayEquals(new float[] { 3.0f, 6.0f }, transposed.values[2]);
@@ -60,6 +61,7 @@ public class MatrixTest {
 
 		Matrix sum = left.add(right);
 
+		assertEquals(left, sum);
 		assertEquals(2, sum.rows());
 		assertEquals(3, sum.columns());
 		assertArrayEquals(new float[] { 8.0f, 10.0f, 12.0f }, sum.values[0]);
@@ -94,6 +96,7 @@ public class MatrixTest {
 
 		Matrix difference = left.subtract(right);
 
+		assertEquals(left, difference);
 		assertEquals(2, difference.rows());
 		assertEquals(3, difference.columns());
 		assertArrayEquals(new float[] { 9.0f, 18.0f, 27.0f }, difference.values[0]);
@@ -129,6 +132,7 @@ public class MatrixTest {
 
 		Matrix product = left.multiply(right);
 
+		assertEquals(left, product);
 		assertEquals(2, product.rows());
 		assertEquals(2, product.columns());
 		assertArrayEquals(new float[] { 58.0f, 64.0f }, product.values[0]);
