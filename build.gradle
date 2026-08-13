@@ -40,3 +40,8 @@ java {
         languageVersion = JavaLanguageVersion.of(21)
     }
 }
+
+tasks.register('runMain', JavaExec) {
+		classpath = sourceSets.test.runtimeClasspath;
+		mainClass = 'Main'
+}
