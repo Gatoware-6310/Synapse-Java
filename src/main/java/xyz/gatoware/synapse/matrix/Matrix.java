@@ -1,5 +1,7 @@
 package xyz.gatoware.synapse.matrix;
 
+import xyz.gatoware.synapse.activation.ActivationFunction;
+
 public class Matrix {
 	private int rows;
 	private int columns;
@@ -103,6 +105,14 @@ public class Matrix {
 				this.values[i][j] *= m2.values[i][j];
 			}
 		}
+
+		return this;
+	}
+
+	public Matrix apply(ActivationFunction func) {
+		for (int i = 0; i < this.rows; i++)
+			for (int j = 0; j < this.columns; j++)
+				this.values[i][j] = func.apply(this.values[i][j]);
 
 		return this;
 	}

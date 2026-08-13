@@ -1,9 +1,19 @@
-# Ignore Gradle project-specific cache directory
-.gradle
+# Gradle
+.gradle/
+build/
 
-# Ignore Gradle build output directory
-build
+# Eclipse
+.metadata/
+.settings/
+bin/
+.classpath
+.project
 
-# Ignore Kotlin plugin data
-.kotlin
+# Kotlin
+.kotlin/
 
+# OS/editor junk
+.DS_Store
+*.swp
+*.swo
+*~
