@@ -30,6 +30,25 @@ public class Matrix {
 		return new Matrix(temp);
 	}
 
+	public Matrix add(Matrix m2) {
+		if (this.columns() != m2.columns() || this.rows() != m2.rows()) {
+			throw new IllegalArgumentException("Matrix dimensions are incompatible!");
+		}
+
+		int rows = this.rows();
+		int cols = this.columns();
+
+		float[][] sum = new float[rows][cols];
+
+		for (int i = 0; i < rows; i++) {
+			for (int j = 0; j < cols; j++) {
+				sum[i][j] = this.values[i][j] + m2.values[i][j];
+			}
+		}
+
+		return new Matrix(sum);
+	}
+
 	public Matrix multiply(Matrix m2) {
 		if (this.columns() != m2.rows()) {
 			throw new IllegalArgumentException("Matrix dimensions are incompatible!");
