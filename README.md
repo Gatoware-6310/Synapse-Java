@@ -24,6 +24,7 @@ It should be noted that column headers are **not** supported.
 The `Dataset` class is a purposefully generic container. The important part is that datasets are mainly comprised of two matrices; `inputs` and `targets`, a target essentially being the expected output or classification for a given input.
 
 Each row in `inputs` corresponds to the same row in `targets`. For example, given the previous dataset, Synapse would interpret it roughly as:
+```
 inputs:  [2, 4, 6, 8] 
 		 [3, 6, 9, 12]
 		 [10, 12, 14, 16] 
@@ -32,6 +33,6 @@ targets: [0]
 		 [1]
 		 [0]
 		 [1]
-
+```
 Additionally, matrices are defined by the `Matrix` class, and are essentially just a wrapper for the type `float[][]` with extra functionality.
 Crucially, a matrix's values can only ever be floating point numbers.
