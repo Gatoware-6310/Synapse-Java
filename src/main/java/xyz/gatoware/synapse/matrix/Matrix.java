@@ -118,9 +118,24 @@ public class Matrix {
 	}
 
 	public Matrix apply(ActivationFunction func) {
-		for (int i = 0; i < this.rows; i++)
-			for (int j = 0; j < this.columns; j++)
-				this.values[i][j] = func.apply(this.values[i][j]);
+		if (rows == 1 || columns == 1) {
+			float[] vector = new float[Math.max(rows, columns)];
+			for (int i = 0; i < vector.length; i++)
+				vector[i] = rows == 1 ? values[0][i] : values[i][0];
+
+			vector = func.apply(vector);
+			for (int i = 0; i < vector.length; i++) {
+				if (rows == 1)
+					values[0][i] = vector[i];
+				else
+					values[i][0] = vector[i];
+			}
+			return this;
+		}
+
+		for (int i = 0; i < rows; i++)
+			for (int j = 0; j < columns; j++)
+				values[i][j] = func.apply(values[i][j]);
 
 		return this;
 	}

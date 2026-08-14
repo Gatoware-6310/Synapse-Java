@@ -20,12 +20,34 @@ public class Dataset {
 		return inputs;
 	}
 
+	/** Returns one row-oriented dataset input as a column vector for a layer. */
+	public Matrix getInput(int index) {
+		if (index < 0 || index >= size)
+			throw new IndexOutOfBoundsException("Dataset input index: " + index);
+
+		Matrix input = new Matrix(inputs.columns(), 1);
+		for (int column = 0; column < inputs.columns(); column++)
+			input.values[column][0] = inputs.values[index][column];
+		return input;
+	}
+
 	public void setInputs(Matrix inputs) {
 		this.inputs = inputs;
 	}
 
 	public Matrix getTargets() {
 		return targets;
+	}
+
+	/** Returns one row-oriented dataset target. */
+	public Matrix getTarget(int index) {
+		if (index < 0 || index >= size)
+			throw new IndexOutOfBoundsException("Dataset target index: " + index);
+
+		Matrix target = new Matrix(targets.columns(), 1);
+		for (int column = 0; column < targets.columns(); column++)
+			target.values[column][0] = targets.values[index][column];
+		return target;
 	}
 
 	public int size() {

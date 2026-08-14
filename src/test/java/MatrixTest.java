@@ -5,8 +5,18 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import xyz.gatoware.synapse.matrix.Matrix;
+import xyz.gatoware.synapse.activation.Softmax;
 
 public class MatrixTest {
+	@Test
+	void softmaxAppliesAcrossAColumnVector() {
+		Matrix matrix = new Matrix(new float[][] { { 1.0f }, { 2.0f } });
+
+		matrix.apply(new Softmax());
+
+		assertArrayEquals(new float[] { 0.2689414f }, matrix.values[0], 0.0001f);
+		assertArrayEquals(new float[] { 0.7310586f }, matrix.values[1], 0.0001f);
+	}
 
 	@Test
 	void valuesConstructorStoresValuesAndDimensions() {

@@ -29,4 +29,15 @@ public class DatasetTest {
 		assertArrayEquals(new float[] { 0 }, dataset.getTargets().values[0]);
 		assertArrayEquals(new float[] { 1 }, dataset.getTargets().values[1]);
 	}
+
+	@Test
+	void sampleAccessorsReturnLayerColumnVectors() {
+		Dataset dataset = CSVLoader.loadDataset("src/test/java/resources/data.csv");
+
+		assertEquals(14, dataset.getInput(0).rows());
+		assertEquals(1, dataset.getInput(0).columns());
+		for (int i = 0; i < 14; i++)
+			assertEquals(i + 1, dataset.getInput(0).values[i][0]);
+		assertEquals(0, dataset.getTarget(0).values[0][0]);
+	}
 }
