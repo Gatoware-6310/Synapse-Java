@@ -1,6 +1,11 @@
 package xyz.gatoware.synapse.activation;
 
+/** The Gaussian error linear unit activation function. */
 public class GELU implements ActivationFunction {
+	/** Creates a GELU activation. */
+	public GELU() {
+	}
+
 	/** Applies the GELU activation to a number. */
 	@Override
 	public float apply(float num) {

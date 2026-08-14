@@ -3,6 +3,7 @@ package xyz.gatoware.synapse.layer;
 import xyz.gatoware.synapse.activation.ActivationFunction;
 import xyz.gatoware.synapse.matrix.Matrix;
 
+/** A fully connected neural network layer. */
 public class DenseLayer implements Layer {
 
 	private Matrix weights;
@@ -12,7 +13,11 @@ public class DenseLayer implements Layer {
 	private Matrix lastWeightedInput;
 	private Matrix lastOutput;
 
-	/** Creates a dense layer with randomly initialized weights. */
+	/** Creates a dense layer with randomly initialized weights.
+	 * @param inputSize the amount of inputs
+	 * @param outputSize the amount of outputs
+	 * @param activationFunction the activation function
+	 */
 	public DenseLayer(int inputSize, int outputSize, ActivationFunction activationFunction) {
 		this.activationFunction = activationFunction;
 		this.weights = new Matrix(outputSize, inputSize);
@@ -26,7 +31,11 @@ public class DenseLayer implements Layer {
 		}
 	}
 
-	/** Creates a dense layer from weights, biases, and an activation function. */
+	/** Creates a dense layer from weights, biases, and an activation function.
+	 * @param weights the layer weights
+	 * @param biases the layer biases
+	 * @param activationFunction the activation function
+	 */
 	public DenseLayer(Matrix weights, Matrix biases, ActivationFunction activationFunction) {
 		if (weights.rows() != biases.rows() || biases.columns() != 1) {
 			throw new IllegalArgumentException("Dense layer biases must have dimensions " + weights.rows() + " x 1");
@@ -38,7 +47,10 @@ public class DenseLayer implements Layer {
 	}
 
 	@Override
-	/** Runs the input through the dense layer. */
+	/** Runs the input through the dense layer.
+	 * @param input the layer input
+	 * @return the layer output
+	 */
 	public Matrix forward(Matrix input) {
 		if (input.rows() != weights.columns() || input.columns() != 1) {
 			throw new IllegalArgumentException("Dense layer input must have dimensions " + weights.columns() + " x 1");
@@ -51,7 +63,11 @@ public class DenseLayer implements Layer {
 	}
 
 	@Override
-	/** Updates the layer using backpropagation and returns the input gradient. */
+	/** Updates the layer using backpropagation and returns the input gradient.
+	 * @param outputGradient the gradient at the layer output
+	 * @param learningRate the training learning rate
+	 * @return the gradient at the layer input
+	 */
 	public Matrix backward(Matrix outputGradient, float learningRate) {
 		if (lastInput == null)
 			throw new IllegalStateException("Dense layer must run forward before backward");
@@ -85,17 +101,23 @@ public class DenseLayer implements Layer {
 		return inputGradient;
 	}
 
-	/** Returns the layer weights. */
+	/** Returns the layer weights.
+	 * @return the layer weights
+	 */
 	public Matrix getWeights() {
 		return weights;
 	}
 
-	/** Returns the layer biases. */
+	/** Returns the layer biases.
+	 * @return the layer biases
+	 */
 	public Matrix getBiases() {
 		return biases;
 	}
 
-	/** Returns the layer activation function. */
+	/** Returns the layer activation function.
+	 * @return the layer activation function
+	 */
 	public ActivationFunction getActivationFunction() {
 		return activationFunction;
 	}

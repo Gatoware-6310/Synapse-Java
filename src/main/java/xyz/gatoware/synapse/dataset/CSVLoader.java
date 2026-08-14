@@ -7,14 +7,25 @@ import java.util.ArrayList;
 
 import xyz.gatoware.synapse.matrix.Matrix;
 
+/** Loads CSV datasets for Synapse. */
 public class CSVLoader {
+	/** Creates a CSV loader. */
+	public CSVLoader() {
+	}
 
-	/** Loads a CSV dataset, treating the first value in each row as an integer label or scalar target. */
+	/** Loads a CSV dataset, treating the first value in each row as an integer label or scalar target.
+	 * @param filename the CSV file to load
+	 * @return the loaded dataset
+	 */
 	public static Dataset loadDataset(final String filename) {
 		return loadDataset(filename, 1);
 	}
 
-	/** Loads a CSV dataset, treating the first targetSize values in each row as the target vector and the remaining values as input data. */
+	/** Loads a CSV dataset, treating the first targetSize values in each row as the target vector and the remaining values as input data.
+	 * @param filename the CSV file to load
+	 * @param targetSize the amount of target values in each row
+	 * @return the loaded dataset
+	 */
 	public static Dataset loadDataset(final String filename, final int targetSize) {
 		if (targetSize <= 0)
 			throw new IllegalArgumentException("Target size must be positive");

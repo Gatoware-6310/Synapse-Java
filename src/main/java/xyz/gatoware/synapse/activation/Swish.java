@@ -1,6 +1,10 @@
 package xyz.gatoware.synapse.activation;
 
+/** The Swish activation function. */
 public class Swish implements ActivationFunction {
+	/** Creates a Swish activation. */
+	public Swish() {
+	}
 	/** Applies the Swish activation to a number. */
 	@Override
 	public float apply(float num) {

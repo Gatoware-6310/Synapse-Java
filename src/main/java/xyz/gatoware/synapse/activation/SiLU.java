@@ -1,6 +1,10 @@
 package xyz.gatoware.synapse.activation;
 
+/** The sigmoid linear unit activation function. */
 public class SiLU implements ActivationFunction {
+	/** Creates a SiLU activation. */
+	public SiLU() {
+	}
 	/** Applies the SiLU activation to a number. */
 	@Override
 	public float apply(float num) {

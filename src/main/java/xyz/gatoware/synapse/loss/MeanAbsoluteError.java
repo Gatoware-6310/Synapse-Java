@@ -2,7 +2,12 @@ package xyz.gatoware.synapse.loss;
 
 import xyz.gatoware.synapse.matrix.Matrix;
 
+/** The mean absolute error loss function. */
 public class MeanAbsoluteError implements LossFunction {
+	/** Creates a mean absolute error loss. */
+	public MeanAbsoluteError() {
+	}
+
 	/** Calculates mean absolute error. */
 	@Override
 	public float calculate(Matrix predicted, Matrix actual) {

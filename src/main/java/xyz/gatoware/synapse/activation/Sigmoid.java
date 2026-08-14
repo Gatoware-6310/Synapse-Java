@@ -1,6 +1,10 @@
 package xyz.gatoware.synapse.activation;
 
+/** The sigmoid activation function. */
 public class Sigmoid implements ActivationFunction {
+	/** Creates a Sigmoid activation. */
+	public Sigmoid() {
+	}
 	/** Applies the Sigmoid activation to a number. */
 	@Override
 	public float apply(float num) {

@@ -28,6 +28,7 @@ import xyz.gatoware.synapse.loss.LossFunction;
 import xyz.gatoware.synapse.loss.SparseCategoricalCrossEntropy;
 import xyz.gatoware.synapse.matrix.Matrix;
 
+/** A lightweight neural network composed of layers. */
 public class NeuralNetwork {
 	private static final int FILE_MAGIC = 0x534E4E31; // SNN1
 	private static final int FILE_VERSION = 1;
@@ -42,19 +43,26 @@ public class NeuralNetwork {
 		// here for compatibility
 	}
 
-	/** Creates a neural network from a list of layers. */
+	/** Creates a neural network from a list of layers.
+	 * @param layerList the layers in the network
+	 */
 	public NeuralNetwork(Layer[] layerList) {
 		for (Layer l : layerList) {
 			addLayer(l);
 		}
 	}
 
-	/** Adds a layer to the neural network. */
+	/** Adds a layer to the neural network.
+	 * @param layer the layer to add
+	 */
 	public void addLayer(Layer layer) {
 		layers.add(layer);
 	}
 
-	/** Runs the input through every layer and returns the output. */
+	/** Runs the input through every layer and returns the output.
+	 * @param input the network input
+	 * @return the network output
+	 */
 	public Matrix forward(Matrix input) {
 		Matrix output = input;
 		for (Layer layer : layers)
@@ -63,12 +71,23 @@ public class NeuralNetwork {
 		return output;
 	}
 
-	/** Trains the network on a dataset using the given loss function. */
+	/** Trains the network on a dataset using the given loss function.
+	 * @param dataset the dataset to train on
+	 * @param lossFunction the loss function to use
+	 * @param epochs the amount of training epochs
+	 * @param learningRate the training learning rate
+	 */
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate) {
 		fit(dataset, lossFunction, epochs, learningRate, false);
 	}
 
-	/** Trains the network on a dataset using the given loss function, optionally logging the average loss and classification accuracy after every epoch. */
+	/** Trains the network on a dataset using the given loss function, optionally logging the average loss and classification accuracy after every epoch.
+	 * @param dataset the dataset to train on
+	 * @param lossFunction the loss function to use
+	 * @param epochs the amount of training epochs
+	 * @param learningRate the training learning rate
+	 * @param logging whether to log after every epoch
+	 */
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
 			final boolean logging) {
 		if (dataset == null)
@@ -113,22 +132,36 @@ public class NeuralNetwork {
 		}
 	}
 
-	/** Trains the network using SparseCategoricalCrossEntropy by default. */
+	/** Trains the network using SparseCategoricalCrossEntropy by default.
+	 * @param dataset the dataset to train on
+	 * @param epochs the amount of training epochs
+	 * @param learningRate the training learning rate
+	 */
 	public void fit(final Dataset dataset, final int epochs, final float learningRate) {
 		fit(dataset, epochs, learningRate, false);
 	}
 
-	/** Trains the network using SparseCategoricalCrossEntropy by default, optionally logging after every epoch. */
+	/** Trains the network using SparseCategoricalCrossEntropy by default, optionally logging after every epoch.
+	 * @param dataset the dataset to train on
+	 * @param epochs the amount of training epochs
+	 * @param learningRate the training learning rate
+	 * @param logging whether to log after every epoch
+	 */
 	public void fit(final Dataset dataset, final int epochs, final float learningRate, final boolean logging) {
 		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, logging);
 	}
 
-	/** Returns the most recent average loss after training. */
+	/** Returns the most recent average loss after training.
+	 * @return the most recent average loss
+	 */
 	public float getLastLoss() {
 		return lastLoss;
 	}
 
-	/** Returns the index of the largest value in the network output. */
+	/** Returns the index of the largest value in the network output.
+	 * @param input the network input
+	 * @return the index of the largest output value
+	 */
 	public int predict(Matrix input) {
 		Matrix output = forward(input);
 		if (output.rows() == 0 || output.columns() == 0 || (output.rows() != 1 && output.columns() != 1)) {
@@ -149,7 +182,10 @@ public class NeuralNetwork {
 		return prediction;
 	}
 
-	/** Returns the fraction of dataset samples classified correctly. */
+	/** Returns the fraction of dataset samples classified correctly.
+	 * @param dataset the dataset to evaluate
+	 * @return the fraction classified correctly
+	 */
 	public float accuracy(Dataset dataset) {
 		if (dataset == null)
 			throw new IllegalArgumentException("Dataset cannot be null");
@@ -199,12 +235,18 @@ public class NeuralNetwork {
 		}
 	}
 
-	/** Saves the model to a file. */
+	/** Saves the model to a file.
+	 * @param filename the file to save to
+	 * @throws IOException if the model cannot be saved
+	 */
 	public void save(String filename) throws IOException {
 		save(Path.of(filename));
 	}
 
-	/** Saves the model to a path. */
+	/** Saves the model to a path.
+	 * @param path the path to save to
+	 * @throws IOException if the model cannot be saved
+	 */
 	public void save(Path path) throws IOException {
 		try (DataOutputStream output = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(path)))) {
 			output.writeInt(FILE_MAGIC);
@@ -224,12 +266,20 @@ public class NeuralNetwork {
 		}
 	}
 
-	/** Loads a model from a file. */
+	/** Loads a model from a file.
+	 * @param filename the file to load
+	 * @return the loaded neural network
+	 * @throws IOException if the model cannot be loaded
+	 */
 	public static NeuralNetwork load(String filename) throws IOException {
 		return load(Path.of(filename));
 	}
 
-	/** Loads a model from a path. */
+	/** Loads a model from a path.
+	 * @param path the path to load
+	 * @return the loaded neural network
+	 * @throws IOException if the model cannot be loaded
+	 */
 	public static NeuralNetwork load(Path path) throws IOException {
 		try (DataInputStream input = new DataInputStream(new BufferedInputStream(Files.newInputStream(path)))) {
 			if (input.readInt() != FILE_MAGIC) {

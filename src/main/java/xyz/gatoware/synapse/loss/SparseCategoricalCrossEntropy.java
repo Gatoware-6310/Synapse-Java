@@ -2,7 +2,12 @@ package xyz.gatoware.synapse.loss;
 
 import xyz.gatoware.synapse.matrix.Matrix;
 
+/** The sparse categorical cross-entropy loss function. */
 public class SparseCategoricalCrossEntropy implements LossFunction {
+	/** Creates a sparse categorical cross-entropy loss. */
+	public SparseCategoricalCrossEntropy() {
+	}
+
 	/** Calculates sparse categorical cross-entropy loss for integer class labels. */
 	@Override
 	public float calculate(Matrix predicted, Matrix actual) {

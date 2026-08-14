@@ -1,6 +1,10 @@
 package xyz.gatoware.synapse.activation;
 
+/** The Softmax activation function. */
 public class Softmax implements ActivationFunction {
+	/** Creates a Softmax activation. */
+	public Softmax() {
+	}
 	/** Returns 1 for scalar application; Softmax is applied to vectors. */
 	@Override
 	public float apply(float num) {

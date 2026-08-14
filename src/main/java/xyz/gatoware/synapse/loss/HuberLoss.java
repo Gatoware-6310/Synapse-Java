@@ -2,6 +2,7 @@ package xyz.gatoware.synapse.loss;
 
 import xyz.gatoware.synapse.matrix.Matrix;
 
+/** The Huber loss function. */
 public class HuberLoss implements LossFunction {
 	private final float delta;
 
@@ -10,7 +11,9 @@ public class HuberLoss implements LossFunction {
 		this(1.0f);
 	}
 
-	/** Creates a Huber loss with the given delta. */
+	/** Creates a Huber loss with the given delta.
+	 * @param delta the Huber loss delta value
+	 */
 	public HuberLoss(float delta) {
 		if (delta <= 0) {
 			throw new IllegalArgumentException("Delta must be positive");

@@ -2,12 +2,16 @@ package xyz.gatoware.synapse.dataset;
 
 import xyz.gatoware.synapse.matrix.Matrix;
 
+/** A generic container for input and target matrices. */
 public class Dataset {
 	private Matrix inputs;
 	private Matrix targets;
 	private int size;
 
-	/** Creates a dataset from input and target matrices. Each row in inputs corresponds to the same row in targets. */
+	/** Creates a dataset from input and target matrices. Each row in inputs corresponds to the same row in targets.
+	 * @param inputs the input matrix
+	 * @param targets the target matrix
+	 */
 	public Dataset(Matrix inputs, Matrix targets) {
 		if (inputs.rows() != targets.rows())
 			throw new IllegalArgumentException("Inputs and targets must have the same amount of rows!");
@@ -17,12 +21,17 @@ public class Dataset {
 		this.size = inputs.rows(); /* Either inputs.rows or targets.rows works - we verified they're the same. */
 	}
 
-	/** Returns the input matrix. */
+	/** Returns the input matrix.
+	 * @return the input matrix
+	 */
 	public Matrix getInputs() {
 		return inputs;
 	}
 
-	/** Returns one row-oriented dataset input as a column vector for a layer. */
+	/** Returns one row-oriented dataset input as a column vector for a layer.
+	 * @param index the dataset input index
+	 * @return the selected input as a column vector
+	 */
 	public Matrix getInput(int index) {
 		if (index < 0 || index >= size)
 			throw new IndexOutOfBoundsException("Dataset input index: " + index);
@@ -33,17 +42,24 @@ public class Dataset {
 		return input;
 	}
 
-	/** Replaces the input matrix. */
+	/** Replaces the input matrix.
+	 * @param inputs the new input matrix
+	 */
 	public void setInputs(Matrix inputs) {
 		this.inputs = inputs;
 	}
 
-	/** Returns the target matrix. */
+	/** Returns the target matrix.
+	 * @return the target matrix
+	 */
 	public Matrix getTargets() {
 		return targets;
 	}
 
-	/** Returns one row-oriented dataset target. */
+	/** Returns one row-oriented dataset target.
+	 * @param index the dataset target index
+	 * @return the selected target as a column vector
+	 */
 	public Matrix getTarget(int index) {
 		if (index < 0 || index >= size)
 			throw new IndexOutOfBoundsException("Dataset target index: " + index);
@@ -54,12 +70,16 @@ public class Dataset {
 		return target;
 	}
 
-	/** Returns the amount of samples in the dataset. */
+	/** Returns the amount of samples in the dataset.
+	 * @return the amount of samples
+	 */
 	public int size() {
 		return size;
 	}
 
-	/** Replaces the target matrix. */
+	/** Replaces the target matrix.
+	 * @param targets the new target matrix
+	 */
 	public void setTargets(Matrix targets) {
 		this.targets = targets;
 	}

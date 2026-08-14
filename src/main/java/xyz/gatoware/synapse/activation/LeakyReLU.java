@@ -1,5 +1,6 @@
 package xyz.gatoware.synapse.activation;
 
+/** The leaky rectified linear unit activation function. */
 public class LeakyReLU implements ActivationFunction {
 	private final float slope;
 
@@ -8,7 +9,9 @@ public class LeakyReLU implements ActivationFunction {
 		this(0.01f);
 	}
 
-	/** Creates a LeakyReLU activation with the given slope. */
+	/** Creates a LeakyReLU activation with the given slope.
+	 * @param slope the negative-input slope
+	 */
 	public LeakyReLU(float slope) {
 		if (slope < 0) {
 			throw new IllegalArgumentException("Slope cannot be negative");
@@ -28,7 +31,9 @@ public class LeakyReLU implements ActivationFunction {
 		return input < 0 ? slope : 1.0f;
 	}
 
-	/** Returns the negative-input slope. */
+	/** Returns the negative-input slope.
+	 * @return the negative-input slope
+	 */
 	public float getSlope() {
 		return slope;
 	}

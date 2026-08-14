@@ -1,5 +1,6 @@
 package xyz.gatoware.synapse.activation;
 
+/** The exponential linear unit activation function. */
 public class ELU implements ActivationFunction {
 	private final float alpha;
 
@@ -8,7 +9,9 @@ public class ELU implements ActivationFunction {
 		this(1.0f);
 	}
 
-	/** Creates an ELU activation with the given alpha. */
+	/** Creates an ELU activation with the given alpha.
+	 * @param alpha the ELU alpha value
+	 */
 	public ELU(float alpha) {
 		if (alpha <= 0) {
 			throw new IllegalArgumentException("Alpha must be positive");
@@ -28,7 +31,9 @@ public class ELU implements ActivationFunction {
 		return input >= 0 ? 1.0f : output + alpha;
 	}
 
-	/** Returns the alpha value. */
+	/** Returns the alpha value.
+	 * @return the alpha value
+	 */
 	public float getAlpha() {
 		return alpha;
 	}

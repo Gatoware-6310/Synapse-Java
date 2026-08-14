@@ -2,7 +2,12 @@ package xyz.gatoware.synapse.loss;
 
 import xyz.gatoware.synapse.matrix.Matrix;
 
+/** The hinge loss function. */
 public class HingeLoss implements LossFunction {
+	/** Creates a hinge loss. */
+	public HingeLoss() {
+	}
+
 	/** Calculates hinge loss. */
 	@Override
 	public float calculate(Matrix predicted, Matrix actual) {

@@ -2,7 +2,12 @@ package xyz.gatoware.synapse.loss;
 
 import xyz.gatoware.synapse.matrix.Matrix;
 
+/** The binary cross-entropy loss function. */
 public class BinaryCrossEntropy implements LossFunction {
+	/** Creates a binary cross-entropy loss. */
+	public BinaryCrossEntropy() {
+	}
+
 	/** Calculates binary cross-entropy loss. */
 	@Override
 	public float calculate(Matrix predicted, Matrix actual) {

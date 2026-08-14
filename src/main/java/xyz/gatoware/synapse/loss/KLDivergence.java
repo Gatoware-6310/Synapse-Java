@@ -2,7 +2,12 @@ package xyz.gatoware.synapse.loss;
 
 import xyz.gatoware.synapse.matrix.Matrix;
 
+/** The Kullback-Leibler divergence loss function. */
 public class KLDivergence implements LossFunction {
+	/** Creates a Kullback-Leibler divergence loss. */
+	public KLDivergence() {
+	}
+
 	/** Calculates Kullback-Leibler divergence. */
 	@Override
 	public float calculate(Matrix predicted, Matrix actual) {

@@ -2,7 +2,12 @@ package xyz.gatoware.synapse.loss;
 
 import xyz.gatoware.synapse.matrix.Matrix;
 
+/** The mean squared error loss function. */
 public class MeanSquaredError implements LossFunction {
+	/** Creates a mean squared error loss. */
+	public MeanSquaredError() {
+	}
+
 	/** Calculates mean squared error. */
 	@Override
 	public float calculate(Matrix predicted, Matrix actual) {

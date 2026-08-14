@@ -2,12 +2,17 @@ package xyz.gatoware.synapse.matrix;
 
 import xyz.gatoware.synapse.activation.ActivationFunction;
 
+/** A wrapper for the type float[][] with extra functionality. */
 public class Matrix {
 	private int rows;
 	private int columns;
+	/** The floating point values in this matrix. */
 	public float[][] values;
 
-	/** Creates a matrix with the given amount of rows and columns. */
+	/** Creates a matrix with the given amount of rows and columns.
+	 * @param rows the amount of rows
+	 * @param columns the amount of columns
+	 */
 	public Matrix(int rows, int columns) {
 		this.rows = rows;
 		this.columns = columns;
@@ -15,7 +20,9 @@ public class Matrix {
 		this.values = new float[rows][columns];
 	}
 
-	/** Creates a matrix from floating point values. */
+	/** Creates a matrix from floating point values.
+	 * @param values the floating point values
+	 */
 	public Matrix(float[][] values) {
 		this.values = values;
 
@@ -23,7 +30,9 @@ public class Matrix {
 		this.columns = values[0].length;
 	}
 
-	/** Returns a copy of this matrix. */
+	/** Returns a copy of this matrix.
+	 * @return a copy of this matrix
+	 */
 	public Matrix copy() {
 		float[][] copy = new float[this.rows][this.columns];
 		for (int i = 0; i < this.rows; i++)
@@ -32,7 +41,9 @@ public class Matrix {
 		return new Matrix(copy);
 	}
 
-	/** Transposes this matrix and returns it. */
+	/** Transposes this matrix and returns it.
+	 * @return this transposed matrix
+	 */
 	public Matrix transpose() {
 		float[][] m = this.values;
 
@@ -45,7 +56,10 @@ public class Matrix {
 		return this;
 	}
 
-	/** Adds another matrix to this matrix and returns it. */
+	/** Adds another matrix to this matrix and returns it.
+	 * @param m2 the matrix to add
+	 * @return this matrix after addition
+	 */
 	public Matrix add(Matrix m2) {
 		if (this.columns() != m2.columns() || this.rows() != m2.rows()) {
 			throw new IllegalArgumentException("Matrix dimensions are incompatible!");
@@ -63,7 +77,10 @@ public class Matrix {
 		return this;
 	}
 
-	/** Subtracts another matrix from this matrix and returns it. */
+	/** Subtracts another matrix from this matrix and returns it.
+	 * @param m2 the matrix to subtract
+	 * @return this matrix after subtraction
+	 */
 	public Matrix subtract(Matrix m2) {
 		if (this.columns() != m2.columns() || this.rows() != m2.rows()) {
 			throw new IllegalArgumentException("Matrix dimensions are incompatible!");
@@ -81,7 +98,10 @@ public class Matrix {
 		return this;
 	}
 
-	/** Multiplies this matrix by another matrix and returns it. */
+	/** Multiplies this matrix by another matrix and returns it.
+	 * @param m2 the matrix to multiply by
+	 * @return this matrix after multiplication
+	 */
 	public Matrix multiply(Matrix m2) {
 		if (this.columns() != m2.rows()) {
 			throw new IllegalArgumentException("Matrix dimensions are incompatible!");
@@ -101,7 +121,10 @@ public class Matrix {
 		return this;
 	}
 
-	/** Multiplies every value in this matrix by a scalar and returns it. */
+	/** Multiplies every value in this matrix by a scalar and returns it.
+	 * @param scalar the scalar to multiply by
+	 * @return this matrix after multiplication
+	 */
 	public Matrix multiply(float scalar) {
 		for (int i = 0; i < this.rows; i++) {
 			for (int j = 0; j < this.columns; j++) {
@@ -111,7 +134,10 @@ public class Matrix {
 		return this;
 	}
 
-	/** Multiplies this matrix element by element with another matrix and returns it. */
+	/** Multiplies this matrix element by element with another matrix and returns it.
+	 * @param m2 the matrix to multiply element by element
+	 * @return this matrix after multiplication
+	 */
 	public Matrix multiply_hadamard(Matrix m2) {
 		if (this.columns() != m2.columns() || this.rows() != m2.rows()) {
 			throw new IllegalArgumentException("Matrix dimensions are incompatible!");
@@ -126,7 +152,10 @@ public class Matrix {
 		return this;
 	}
 
-	/** Applies an activation function to every value in this matrix and returns it. */
+	/** Applies an activation function to every value in this matrix and returns it.
+	 * @param func the activation function to apply
+	 * @return this matrix after applying the function
+	 */
 	public Matrix apply(ActivationFunction func) {
 		if (rows == 1 || columns == 1) {
 			float[] vector = new float[Math.max(rows, columns)];
@@ -150,12 +179,16 @@ public class Matrix {
 		return this;
 	}
 
-	/** Returns the amount of rows in this matrix. */
+	/** Returns the amount of rows in this matrix.
+	 * @return the amount of rows
+	 */
 	public int rows() {
 		return rows;
 	}
 
-	/** Returns the amount of columns in this matrix. */
+	/** Returns the amount of columns in this matrix.
+	 * @return the amount of columns
+	 */
 	public int columns() {
 		return columns;
 	}
