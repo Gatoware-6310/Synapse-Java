@@ -36,3 +36,17 @@ targets: [0]
 ```
 Additionally, matrices are defined by the `Matrix` class, and are essentially just a wrapper for the type `float[][]` with extra functionality.
 Crucially, a matrix's values can only ever be floating point numbers.
+
+## Saving models
+Saving a model and loading it again is straightforward. For example:
+
+```java
+NeuralNetwork network = new NeuralNetwork(new Layer[] {
+	new DenseLayer(2, 3, new ReLU()),
+	new DenseLayer(3, 1, new Sigmoid())
+});
+
+network.save("model.snn");
+
+NeuralNetwork loadedNetwork = NeuralNetwork.load("model.snn");
+```

@@ -18,4 +18,8 @@ public class LeakyReLU implements ActivationFunction {
 	public float apply(float num) {
 		return num < 0 ? slope * num : num;
 	}
+
+	public float getSlope() {
+		return slope;
+	}
 }

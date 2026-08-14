@@ -18,4 +18,8 @@ public class ELU implements ActivationFunction {
 	public float apply(float num) {
 		return num >= 0 ? num : (float) (alpha * Math.expm1(num));
 	}
+
+	public float getAlpha() {
+		return alpha;
+	}
 }

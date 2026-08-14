@@ -9,7 +9,7 @@ import xyz.gatoware.synapse.dataset.Dataset;
 public class DatasetTest {
 	@Test
 	void csvDatasetTest() {
-		Dataset dataset = CSVLoader.loadDataset("src/test/java/data.csv");
+		Dataset dataset = CSVLoader.loadDataset("src/test/java/resources/data.csv");
 
 		assertEquals(2, dataset.size());
 		assertEquals(2, dataset.getInputs().rows());
