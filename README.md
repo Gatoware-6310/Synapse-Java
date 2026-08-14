@@ -55,7 +55,7 @@ NeuralNetwork network = new NeuralNetwork(new Layer[] {
 	new DenseLayer(3, 2, new Softmax())
 });
 
-`network.fit` takes arguments `Dataset dataset`, `int epochs`, `float learningRate`, and `boolean logging`
+// `network.fit` takes arguments `Dataset dataset`, `int epochs`, `float learningRate`, and `boolean logging`
 
 network.fit(dataset, 10, 0.01f);
 ```
