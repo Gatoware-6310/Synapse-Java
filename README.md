@@ -66,7 +66,7 @@ For simple fully-connected networks, Synapse can also construct the layers autom
 NeuralNetwork network = new NeuralNetwork(784, 128, 3, 10);
 ```
 
-This creates three hidden layers with 128 neurons each, using `ReLU`, followed by a 10-neuron `Softmax` output layer.
+This creates three hidden layers with 128 neurons each using `ReLU`, followed by a 10-neuron `Softmax` output layer. Passing `0` hidden layers creates a direct input-to-output `Softmax` layer instead.
 
 ```java
 network.fit(dataset, new MeanSquaredError(), 100, 0.001f);
