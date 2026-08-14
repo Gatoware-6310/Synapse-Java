@@ -60,6 +60,14 @@ NeuralNetwork network = new NeuralNetwork(new Layer[] {
 network.fit(dataset, 10, 0.01f);
 ```
 
+For simple fully-connected networks, Synapse can also construct the layers automatically by passing the input size, hidden layer size, amount of hidden layers, and output size:
+
+```java
+NeuralNetwork network = new NeuralNetwork(784, 128, 3, 10);
+```
+
+This creates three hidden layers with 128 neurons each, using `ReLU`, followed by a 10-neuron `Softmax` output layer.
+
 ```java
 network.fit(dataset, new MeanSquaredError(), 100, 0.001f);
 ```
