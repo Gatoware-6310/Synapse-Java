@@ -19,6 +19,11 @@ public class ELU implements ActivationFunction {
 		return num >= 0 ? num : (float) (alpha * Math.expm1(num));
 	}
 
+	@Override
+	public float derivative(float input, float output) {
+		return input >= 0 ? 1.0f : output + alpha;
+	}
+
 	public float getAlpha() {
 		return alpha;
 	}

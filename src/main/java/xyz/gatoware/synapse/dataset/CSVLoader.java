@@ -10,8 +10,16 @@ import xyz.gatoware.synapse.matrix.Matrix;
 public class CSVLoader {
 
 	public static Dataset loadDataset(final String filename) {
+		return loadDataset(filename, 1);
+	}
+
+	public static Dataset loadDataset(final String filename, final int targetSize) {
+		if (targetSize <= 0)
+			throw new IllegalArgumentException("Target size must be positive");
+
 		ArrayList<float[]> inputRows = new ArrayList<>();
-		ArrayList<Float> targetRows = new ArrayList<>();
+		ArrayList<float[]> targetRows = new ArrayList<>();
+		int inputSize = -1;
 
 		try (BufferedReader reader = new BufferedReader(new FileReader(filename))) {
 
@@ -19,16 +27,24 @@ public class CSVLoader {
 
 			while ((line = reader.readLine()) != null) {
 				String[] values = line.split(",");
+				if (values.length <= targetSize)
+					throw new IllegalArgumentException("CSV row must contain targets and input data");
 
-				float target = Float.parseFloat(values[0]);
+				float[] targets = new float[targetSize];
+				for (int i = 0; i < targetSize; i++)
+					targets[i] = Float.parseFloat(values[i]);
 
-				float[] inputs = new float[values.length - 1];
+				float[] inputs = new float[values.length - targetSize];
 
-				for (int i = 1; i < values.length; i++) {
-					inputs[i - 1] = Float.parseFloat(values[i]);
-				}
+				for (int i = targetSize; i < values.length; i++)
+					inputs[i - targetSize] = Float.parseFloat(values[i]);
 
-				targetRows.add(target);
+				if (inputSize == -1)
+					inputSize = inputs.length;
+				else if (inputs.length != inputSize)
+					throw new IllegalArgumentException("CSV rows must contain the same amount of input data");
+
+				targetRows.add(targets);
 				inputRows.add(inputs);
 			}
 
@@ -37,11 +53,11 @@ public class CSVLoader {
 		}
 
 		float[][] inputs = new float[inputRows.size()][];
-		float[][] targets = new float[targetRows.size()][1];
+		float[][] targets = new float[targetRows.size()][targetSize];
 
 		for (int i = 0; i < inputRows.size(); i++) {
 			inputs[i] = inputRows.get(i);
-			targets[i][0] = targetRows.get(i);
+			targets[i] = targetRows.get(i);
 		}
 
 		return new Dataset(new Matrix(inputs), new Matrix(targets));

@@ -8,6 +8,9 @@ public class DenseLayer implements Layer {
 	private Matrix weights;
 	private Matrix biases;
 	private ActivationFunction activationFunction;
+	private Matrix lastInput;
+	private Matrix lastWeightedInput;
+	private Matrix lastOutput;
 
 	public DenseLayer(int inputSize, int outputSize, ActivationFunction activationFunction) {
 		this.activationFunction = activationFunction;
@@ -38,7 +41,44 @@ public class DenseLayer implements Layer {
 			throw new IllegalArgumentException("Dense layer input must have dimensions " + weights.columns() + " x 1");
 		}
 
-		return weights.copy().multiply(input).add(biases).apply(activationFunction);
+		lastInput = input.copy();
+		lastWeightedInput = weights.copy().multiply(input).add(biases);
+		lastOutput = lastWeightedInput.copy().apply(activationFunction);
+		return lastOutput.copy();
+	}
+
+	@Override
+	public Matrix backward(Matrix outputGradient, float learningRate) {
+		if (lastInput == null)
+			throw new IllegalStateException("Dense layer must run forward before backward");
+		if (outputGradient.rows() != weights.rows() || outputGradient.columns() != 1)
+			throw new IllegalArgumentException("Dense layer output gradient must have dimensions " + weights.rows() + " x 1");
+		if (!Float.isFinite(learningRate) || learningRate <= 0.0f)
+			throw new IllegalArgumentException("Learning rate must be positive and finite");
+
+		float[] weightedInput = new float[weights.rows()];
+		float[] output = new float[weights.rows()];
+		float[] gradient = new float[weights.rows()];
+		for (int i = 0; i < weights.rows(); i++) {
+			weightedInput[i] = lastWeightedInput.values[i][0];
+			output[i] = lastOutput.values[i][0];
+			gradient[i] = outputGradient.values[i][0];
+		}
+		float[] weightedGradient = activationFunction.backward(weightedInput, output, gradient);
+
+		Matrix inputGradient = new Matrix(weights.columns(), 1);
+		for (int input = 0; input < weights.columns(); input++) {
+			for (int neuron = 0; neuron < weights.rows(); neuron++)
+				inputGradient.values[input][0] += weights.values[neuron][input] * weightedGradient[neuron];
+		}
+
+		for (int neuron = 0; neuron < weights.rows(); neuron++) {
+			for (int input = 0; input < weights.columns(); input++)
+				weights.values[neuron][input] -= learningRate * weightedGradient[neuron] * lastInput.values[input][0];
+			biases.values[neuron][0] -= learningRate * weightedGradient[neuron];
+		}
+
+		return inputGradient;
 	}
 
 	public Matrix getWeights() {

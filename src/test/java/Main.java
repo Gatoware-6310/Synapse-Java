@@ -1,23 +1,34 @@
-import xyz.gatoware.synapse.layer.*;
-import xyz.gatoware.synapse.activation.*;
-import xyz.gatoware.synapse.matrix.*;
+import java.io.IOException;
+
 import xyz.gatoware.synapse.NeuralNetwork;
-import xyz.gatoware.synapse.utils.MatrixUtils;;
+import xyz.gatoware.synapse.activation.ReLU;
+import xyz.gatoware.synapse.activation.Softmax;
+import xyz.gatoware.synapse.dataset.CSVLoader;
+import xyz.gatoware.synapse.dataset.Dataset;
+import xyz.gatoware.synapse.layer.DenseLayer;
+import xyz.gatoware.synapse.layer.Layer;
 
 public class Main {
-	public static void main(String[] args) {
+
+	private static final String DATASET = "src/test/java/resources/MNIST.csv";
+	private static final String MODEL = "MNIST_example.snn";
+	private static final int EPOCHS = 10;
+	private static final float LEARNING_RATE = 0.01f;
+
+	public static void main(String[] args) throws IOException {
+		System.out.println("Loading MNIST dataset...");
+		Dataset dataset = CSVLoader.loadDataset(DATASET);
+
 		NeuralNetwork network = new NeuralNetwork(new Layer[] {
-				new DenseLayer(2, 5, new ReLU()),
-				new DenseLayer(5, 5, new ReLU()),
-				new DenseLayer(5, 5, new ReLU()),
-				new DenseLayer(5, 3, new Softmax()),
+				new DenseLayer(784, 128, new ReLU()),
+				new DenseLayer(128, 64, new ReLU()),
+				new DenseLayer(64, 10, new Softmax())
 		});
 
-		final Matrix output = network.forward(new Matrix(new float[][] {
-				{ 1 },
-				{ 2 }
-		}));
+		System.out.println("Training for " + EPOCHS + " epochs...");
+		network.fit(dataset, EPOCHS, LEARNING_RATE, true);
 
-		MatrixUtils.printMatrix(output);
+		network.save(MODEL);
+		System.out.printf("Saved %s with final accuracy: %.2f%%%n", MODEL, network.accuracy(dataset) * 100.0f);
 	}
 }

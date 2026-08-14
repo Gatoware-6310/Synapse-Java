@@ -74,6 +74,22 @@ public class DenseLayerTest {
 		assertEquals("Dense layer input must have dimensions 3 x 1", wrongColumns.getMessage());
 	}
 
+	@Test
+	void backwardUpdatesWeightsAndReturnsInputGradient() {
+		DenseLayer layer = new DenseLayer(
+				new Matrix(new float[][] { { 2.0f, -1.0f } }),
+				new Matrix(new float[][] { { 0.0f } }),
+				new ReLU());
+		layer.forward(new Matrix(new float[][] { { 3.0f }, { 4.0f } }));
+
+		Matrix inputGradient = layer.backward(new Matrix(new float[][] { { 0.5f } }), 0.1f);
+
+		assertArrayEquals(new float[] { 1.0f }, inputGradient.values[0]);
+		assertArrayEquals(new float[] { -0.5f }, inputGradient.values[1]);
+		assertArrayEquals(new float[] { 1.85f, -1.2f }, layer.getWeights().values[0], 0.0001f);
+		assertEquals(-0.05f, layer.getBiases().values[0][0], 0.0001f);
+	}
+
 	private Matrix weights(DenseLayer layer) {
 		return parameter(layer, "weights");
 	}

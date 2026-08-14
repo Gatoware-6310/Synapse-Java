@@ -19,6 +19,11 @@ public class LeakyReLU implements ActivationFunction {
 		return num < 0 ? slope * num : num;
 	}
 
+	@Override
+	public float derivative(float input, float output) {
+		return input < 0 ? slope : 1.0f;
+	}
+
 	public float getSlope() {
 		return slope;
 	}

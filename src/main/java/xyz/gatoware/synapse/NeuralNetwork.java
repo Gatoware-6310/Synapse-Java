@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
 
 import xyz.gatoware.synapse.activation.ActivationFunction;
 import xyz.gatoware.synapse.activation.ELU;
@@ -20,8 +21,11 @@ import xyz.gatoware.synapse.activation.Sigmoid;
 import xyz.gatoware.synapse.activation.Softmax;
 import xyz.gatoware.synapse.activation.Swish;
 import xyz.gatoware.synapse.activation.Tanh;
+import xyz.gatoware.synapse.dataset.Dataset;
 import xyz.gatoware.synapse.layer.DenseLayer;
 import xyz.gatoware.synapse.layer.Layer;
+import xyz.gatoware.synapse.loss.LossFunction;
+import xyz.gatoware.synapse.loss.SparseCategoricalCrossEntropy;
 import xyz.gatoware.synapse.matrix.Matrix;
 
 public class NeuralNetwork {
@@ -31,6 +35,7 @@ public class NeuralNetwork {
 	private static final int MAX_MATRIX_DIMENSION = 1_000_000;
 
 	private List<Layer> layers = new ArrayList<>();
+	private float lastLoss = Float.NaN;
 
 	public NeuralNetwork() {
 		// here for compatibility
@@ -52,6 +57,137 @@ public class NeuralNetwork {
 			output = layer.forward(output);
 
 		return output;
+	}
+
+	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate) {
+		fit(dataset, lossFunction, epochs, learningRate, false);
+	}
+
+	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
+			final boolean logging) {
+		if (dataset == null)
+			throw new IllegalArgumentException("Dataset cannot be null");
+		if (lossFunction == null)
+			throw new IllegalArgumentException("Loss function cannot be null");
+		if (dataset.size() == 0)
+			throw new IllegalArgumentException("Dataset cannot be empty");
+		if (layers.isEmpty())
+			throw new IllegalStateException("Neural network must contain at least one layer");
+		if (epochs <= 0)
+			throw new IllegalArgumentException("Epochs must be positive");
+		if (!Float.isFinite(learningRate) || learningRate <= 0.0f)
+			throw new IllegalArgumentException("Learning rate must be positive and finite");
+
+		int[] order = new int[dataset.size()];
+		for (int i = 0; i < order.length; i++)
+			order[i] = i;
+		Random random = new Random();
+
+		for (int epoch = 0; epoch < epochs; epoch++) {
+			shuffle(order, random);
+			float totalLoss = 0.0f;
+
+			for (int index : order) {
+				Matrix output = forward(dataset.getInput(index));
+				Matrix predicted = rowVector(output);
+				Matrix actual = rowVector(dataset.getTarget(index));
+				totalLoss += lossFunction.calculate(predicted, actual);
+
+				Matrix gradient = columnVector(lossFunction.gradient(predicted, actual));
+				for (int layer = layers.size() - 1; layer >= 0; layer--)
+					gradient = layers.get(layer).backward(gradient, learningRate);
+			}
+
+			lastLoss = totalLoss / dataset.size();
+
+			if (logging) {
+				System.out.printf("Epoch %d loss: %.6f accuracy: %.2f%%%n", epoch + 1, lastLoss,
+					accuracy(dataset) * 100.0f);
+			}
+		}
+	}
+
+	public void fit(final Dataset dataset, final int epochs, final float learningRate) {
+		fit(dataset, epochs, learningRate, false);
+	}
+
+	public void fit(final Dataset dataset, final int epochs, final float learningRate, final boolean logging) {
+		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, logging);
+	}
+
+	public float getLastLoss() {
+		return lastLoss;
+	}
+
+	/** Returns the index of the largest value in the network output. */
+	public int predict(Matrix input) {
+		Matrix output = forward(input);
+		if (output.rows() == 0 || output.columns() == 0 || (output.rows() != 1 && output.columns() != 1)) {
+			throw new IllegalStateException("Network output must be a non-empty vector");
+		}
+
+		int prediction = 0;
+		float highest = output.rows() == 1 ? output.values[0][0] : output.values[0][0];
+		int length = Math.max(output.rows(), output.columns());
+		for (int i = 1; i < length; i++) {
+			float value = output.rows() == 1 ? output.values[0][i] : output.values[i][0];
+			if (value > highest) {
+				highest = value;
+				prediction = i;
+			}
+		}
+
+		return prediction;
+	}
+
+	/** Returns the fraction of dataset samples classified correctly. */
+	public float accuracy(Dataset dataset) {
+		if (dataset == null)
+			throw new IllegalArgumentException("Dataset cannot be null");
+		if (dataset.size() == 0)
+			throw new IllegalArgumentException("Dataset cannot be empty");
+
+		int correct = 0;
+		for (int i = 0; i < dataset.size(); i++) {
+			int target = (int) dataset.getTarget(i).values[0][0];
+			if (predict(dataset.getInput(i)) == target)
+				correct++;
+		}
+
+		return (float) correct / dataset.size();
+	}
+
+	private static Matrix rowVector(Matrix vector) {
+		if (vector.rows() == 1)
+			return vector.copy();
+		if (vector.columns() != 1)
+			throw new IllegalArgumentException("Expected a vector");
+
+		Matrix result = new Matrix(1, vector.rows());
+		for (int i = 0; i < vector.rows(); i++)
+			result.values[0][i] = vector.values[i][0];
+		return result;
+	}
+
+	private static Matrix columnVector(Matrix vector) {
+		if (vector.columns() == 1)
+			return vector.copy();
+		if (vector.rows() != 1)
+			throw new IllegalArgumentException("Expected a vector");
+
+		Matrix result = new Matrix(vector.columns(), 1);
+		for (int i = 0; i < vector.columns(); i++)
+			result.values[i][0] = vector.values[0][i];
+		return result;
+	}
+
+	private static void shuffle(int[] values, Random random) {
+		for (int i = values.length - 1; i > 0; i--) {
+			int other = random.nextInt(i + 1);
+			int value = values[i];
+			values[i] = values[other];
+			values[other] = value;
+		}
 	}
 
 	public void save(String filename) throws IOException {

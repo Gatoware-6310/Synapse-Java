@@ -1,16 +1,22 @@
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
 import xyz.gatoware.synapse.NeuralNetwork;
 import xyz.gatoware.synapse.activation.ReLU;
 import xyz.gatoware.synapse.activation.Sigmoid;
+import xyz.gatoware.synapse.activation.Softmax;
+import xyz.gatoware.synapse.dataset.Dataset;
 import xyz.gatoware.synapse.layer.DenseLayer;
+import xyz.gatoware.synapse.loss.SparseCategoricalCrossEntropy;
 import xyz.gatoware.synapse.matrix.Matrix;
 import xyz.gatoware.synapse.layer.*;
 
@@ -55,6 +61,94 @@ public class NeuralNetworkTest {
 
 		assertEquals(1, output.rows());
 		assertEquals(1, output.columns());
+	}
+
+	@Test
+	void predictReturnsIndexOfLargestOutput() {
+		NeuralNetwork network = new NeuralNetwork(new Layer[] {
+				new DenseLayer(new Matrix(new float[][] {
+						{ 1.0f },
+						{ 3.0f },
+						{ 2.0f }
+				}), new Matrix(new float[][] {
+						{ 0.0f },
+						{ 0.0f },
+						{ 0.0f }
+				}), new ReLU())
+		});
+
+		assertEquals(1, network.predict(new Matrix(new float[][] { { 1.0f } })));
+	}
+
+	@Test
+	void fitLearnsIntegerClassLabels() {
+		Dataset dataset = new Dataset(
+				new Matrix(new float[][] {
+						{ 1.0f, 0.0f },
+						{ 0.0f, 1.0f }
+				}),
+				new Matrix(new float[][] {
+						{ 0.0f },
+						{ 1.0f }
+				}));
+		DenseLayer hidden = new DenseLayer(
+				new Matrix(new float[][] {
+						{ 1.0f, 0.0f },
+						{ 0.0f, 1.0f }
+				}),
+				new Matrix(new float[][] {
+						{ 0.1f },
+						{ 0.1f }
+				}),
+				new ReLU());
+		DenseLayer output = new DenseLayer(
+				new Matrix(new float[][] {
+						{ 0.0f, 0.0f },
+						{ 0.0f, 0.0f }
+				}),
+				new Matrix(new float[][] {
+						{ 0.0f },
+						{ 0.0f }
+				}),
+				new Softmax());
+		NeuralNetwork network = new NeuralNetwork(new Layer[] { hidden, output });
+		Matrix hiddenWeightsBefore = hidden.getWeights().copy();
+
+		network.fit(dataset, new SparseCategoricalCrossEntropy(), 100, 0.1f);
+
+		assertEquals(0, network.predict(dataset.getInput(0)));
+		assertEquals(1, network.predict(dataset.getInput(1)));
+		assertTrue(network.getLastLoss() < 0.1f);
+		assertTrue(hidden.getWeights().values[0][0] != hiddenWeightsBefore.values[0][0]);
+	}
+
+	@Test
+	void fitLogsLossWhenLoggingIsEnabled() {
+		Dataset dataset = new Dataset(
+				new Matrix(new float[][] {
+						{ 1.0f, 0.0f },
+						{ 0.0f, 1.0f }
+				}),
+				new Matrix(new float[][] {
+						{ 0.0f },
+						{ 1.0f }
+				}));
+		NeuralNetwork network = new NeuralNetwork(new Layer[] {
+				new DenseLayer(2, 2, new Softmax())
+		});
+		ByteArrayOutputStream output = new ByteArrayOutputStream();
+		PrintStream originalOutput = System.out;
+
+		try {
+			System.setOut(new PrintStream(output));
+			network.fit(dataset, 1, 0.1f, true);
+		} finally {
+			System.setOut(originalOutput);
+		}
+
+		String log = output.toString();
+		assertTrue(log.contains("loss:"));
+		assertTrue(log.contains("accuracy:"));
 	}
 
 	@Test

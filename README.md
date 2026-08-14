@@ -20,6 +20,15 @@ An example of a full CSV dataset to detect a string of even (0) or odd (1) numbe
 
 It should be noted that column headers are **not** supported.
 
+By default, `CSVLoader` treats the first value in each row as an integer label or scalar target, and the rest as input data. To use multiple target values, pass the amount of target values as the second argument:
+
+```java
+Dataset labels = CSVLoader.loadDataset("dataset.csv");
+Dataset vectors = CSVLoader.loadDataset("dataset.csv", 10);
+```
+
+In the second example, the first 10 values in each row are treated as the **target vector**, and the remaining values are input data.
+
 ### Dataset Implementation
 The `Dataset` class is a purposefully generic container. The important part is that datasets are mainly comprised of two matrices; `inputs` and `targets`, a target essentially being the expected output or classification for a given input.
 
@@ -36,6 +45,59 @@ targets: [0]
 ```
 Additionally, matrices are defined by the `Matrix` class, and are essentially just a wrapper for the type `float[][]` with extra functionality.
 Crucially, a matrix's values can only ever be floating point numbers.
+
+## Training models
+For datasets containing integer class labels, the simplest form of `fit` uses `SparseCategoricalCrossEntropy` by default:
+
+```java
+NeuralNetwork network = new NeuralNetwork(new Layer[] {
+	new DenseLayer(4, 3, new ReLU()),
+	new DenseLayer(3, 2, new Softmax())
+});
+
+`network.fit` takes arguments `Dataset dataset`, `int epochs`, `float learningRate`, and `boolean logging`
+
+network.fit(dataset, 10, 0.01f);
+```
+
+```java
+network.fit(dataset, new MeanSquaredError(), 100, 0.001f);
+```
+
+Other loss functions that Synapse includes are:
+
+- `BinaryCrossEntropy`
+- `CategoricalCrossEntropy`
+- `SparseCategoricalCrossEntropy`
+- `MeanSquaredError`
+- `MeanAbsoluteError`
+- `HuberLoss`
+- `HingeLoss`
+- `KLDivergence`
+
+Other activation functions that Synapse includes are:
+
+- `ELU`
+- `GELU`
+- `LeakyReLU`
+- `ReLU`
+- `Sigmoid`
+- `SiLU`
+- `Softmax`
+- `Swish`
+- `Tanh`
+
+Logging can be enabled by passing `true` as the final argument. This prints the average loss and classification accuracy after every epoch:
+
+```java
+network.fit(dataset, 10, 0.01f, true);
+```
+
+The most recent average loss is also available after training with `getLastLoss()`, e.g,
+
+```java
+System.out.println("Final loss: " + network.getLastLoss());
+```
 
 ## Saving models
 Saving a model and loading it again is straightforward. For example:
