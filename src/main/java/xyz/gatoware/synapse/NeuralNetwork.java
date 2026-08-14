@@ -52,6 +52,34 @@ public class NeuralNetwork {
 		}
 	}
 
+
+	public NeuralNetwork(int inputs, int layerSize, int layers, int outputs) {
+		if (inputs <= 0)
+		throw new IllegalArgumentException("inputs must be greater than 0");
+
+		if (layerSize <= 0)
+		throw new IllegalArgumentException("layerSize must be greater than 0");
+
+		if (layers < 0)
+		throw new IllegalArgumentException("layers cannot be negative");
+
+		if (outputs <= 0)
+		throw new IllegalArgumentException("outputs must be greater than 0");
+
+		if (layers == 0) {
+			addLayer(new DenseLayer(inputs, outputs, new Softmax()));
+			return;
+		}
+
+		addLayer(new DenseLayer(inputs, layerSize, new ReLU()));
+
+		for (int i = 1; i < layers; i++)
+			addLayer(new DenseLayer(layerSize, layerSize, new ReLU()));
+
+		addLayer(new DenseLayer(layerSize, outputs, new Softmax()));
+	}
+
+
 	/** Adds a layer to the neural network.
 	 * @param layer the layer to add
 	 */

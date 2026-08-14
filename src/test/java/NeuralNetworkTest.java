@@ -6,6 +6,7 @@ import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -35,6 +36,41 @@ public class NeuralNetworkTest {
 		Matrix output = network.forward(new Matrix(new float[][] { { 1.0f } }));
 
 		assertArrayEquals(new float[] { 9.0f }, output.values[0]);
+	}
+
+	@Test
+	void testAutomaticLayerConstruction() {
+		NeuralNetwork network = new NeuralNetwork(784, 128, 3, 10);
+
+		Matrix output = network.forward(new Matrix(784, 1));
+
+		assertEquals(10, output.rows());
+		assertEquals(1, output.columns());
+	}
+
+	@Test
+	void testZeroHiddenLayers() {
+		NeuralNetwork network = new NeuralNetwork(784, 128, 0, 10);
+
+		Matrix output = network.forward(new Matrix(784, 1));
+
+		assertEquals(10, output.rows());
+		assertEquals(1, output.columns());
+	}
+
+	@Test
+	void testInvalidArguments() {
+		assertThrows(IllegalArgumentException.class,
+				() -> new NeuralNetwork(0, 128, 2, 10));
+
+		assertThrows(IllegalArgumentException.class,
+				() -> new NeuralNetwork(784, 0, 2, 10));
+
+		assertThrows(IllegalArgumentException.class,
+				() -> new NeuralNetwork(784, 128, -1, 10));
+
+		assertThrows(IllegalArgumentException.class,
+				() -> new NeuralNetwork(784, 128, 2, 0));
 	}
 
 	@Test
@@ -70,11 +106,12 @@ public class NeuralNetworkTest {
 						{ 1.0f },
 						{ 3.0f },
 						{ 2.0f }
-				}), new Matrix(new float[][] {
-						{ 0.0f },
-						{ 0.0f },
-						{ 0.0f }
-				}), new ReLU())
+				}), new Matrix(
+						new float[][] {
+								{ 0.0f },
+								{ 0.0f },
+								{ 0.0f }
+						}), new ReLU())
 		});
 
 		assertEquals(1, network.predict(new Matrix(new float[][] { { 1.0f } })));
