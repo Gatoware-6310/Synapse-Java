@@ -1,11 +1,13 @@
 package xyz.gatoware.synapse.activation;
 
 public class GELU implements ActivationFunction {
+	/** Applies the GELU activation to a number. */
 	@Override
 	public float apply(float num) {
 		return (float) (0.5 * num * (1 + erf(num / Math.sqrt(2))));
 	}
 
+	/** Returns the GELU derivative. */
 	@Override
 	public float derivative(float input, float output) {
 		double cdf = 0.5 * (1.0 + erf(input / Math.sqrt(2.0)));

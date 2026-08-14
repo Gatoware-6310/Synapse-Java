@@ -3,6 +3,7 @@ package xyz.gatoware.synapse.loss;
 import xyz.gatoware.synapse.matrix.Matrix;
 
 public class BinaryCrossEntropy implements LossFunction {
+	/** Calculates binary cross-entropy loss. */
 	@Override
 	public float calculate(Matrix predicted, Matrix actual) {
 		validateDimensions(predicted, actual);
@@ -22,6 +23,7 @@ public class BinaryCrossEntropy implements LossFunction {
 		return -loss / (predicted.rows() * predicted.columns());
 	}
 
+	/** Calculates the binary cross-entropy gradient. */
 	@Override
 	public Matrix gradient(Matrix predicted, Matrix actual) {
 		validateDimensions(predicted, actual);

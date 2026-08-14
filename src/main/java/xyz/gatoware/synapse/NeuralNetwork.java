@@ -37,20 +37,24 @@ public class NeuralNetwork {
 	private List<Layer> layers = new ArrayList<>();
 	private float lastLoss = Float.NaN;
 
+	/** Creates an empty neural network. */
 	public NeuralNetwork() {
 		// here for compatibility
 	}
 
+	/** Creates a neural network from a list of layers. */
 	public NeuralNetwork(Layer[] layerList) {
 		for (Layer l : layerList) {
 			addLayer(l);
 		}
 	}
 
+	/** Adds a layer to the neural network. */
 	public void addLayer(Layer layer) {
 		layers.add(layer);
 	}
 
+	/** Runs the input through every layer and returns the output. */
 	public Matrix forward(Matrix input) {
 		Matrix output = input;
 		for (Layer layer : layers)
@@ -59,10 +63,12 @@ public class NeuralNetwork {
 		return output;
 	}
 
+	/** Trains the network on a dataset using the given loss function. */
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate) {
 		fit(dataset, lossFunction, epochs, learningRate, false);
 	}
 
+	/** Trains the network on a dataset using the given loss function, optionally logging the average loss and classification accuracy after every epoch. */
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
 			final boolean logging) {
 		if (dataset == null)
@@ -107,14 +113,17 @@ public class NeuralNetwork {
 		}
 	}
 
+	/** Trains the network using SparseCategoricalCrossEntropy by default. */
 	public void fit(final Dataset dataset, final int epochs, final float learningRate) {
 		fit(dataset, epochs, learningRate, false);
 	}
 
+	/** Trains the network using SparseCategoricalCrossEntropy by default, optionally logging after every epoch. */
 	public void fit(final Dataset dataset, final int epochs, final float learningRate, final boolean logging) {
 		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, logging);
 	}
 
+	/** Returns the most recent average loss after training. */
 	public float getLastLoss() {
 		return lastLoss;
 	}
@@ -190,10 +199,12 @@ public class NeuralNetwork {
 		}
 	}
 
+	/** Saves the model to a file. */
 	public void save(String filename) throws IOException {
 		save(Path.of(filename));
 	}
 
+	/** Saves the model to a path. */
 	public void save(Path path) throws IOException {
 		try (DataOutputStream output = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(path)))) {
 			output.writeInt(FILE_MAGIC);
@@ -213,10 +224,12 @@ public class NeuralNetwork {
 		}
 	}
 
+	/** Loads a model from a file. */
 	public static NeuralNetwork load(String filename) throws IOException {
 		return load(Path.of(filename));
 	}
 
+	/** Loads a model from a path. */
 	public static NeuralNetwork load(Path path) throws IOException {
 		try (DataInputStream input = new DataInputStream(new BufferedInputStream(Files.newInputStream(path)))) {
 			if (input.readInt() != FILE_MAGIC) {

@@ -3,6 +3,7 @@ package xyz.gatoware.synapse.utils;
 import xyz.gatoware.synapse.matrix.Matrix;
 
 public class MatrixUtils {
+	/** Prints a matrix to standard output. */
 	public static void printMatrix(Matrix m) {
 		for (int i = 0; i < m.rows(); i++) {
 			for (int j = 0; j < m.columns(); j++) {

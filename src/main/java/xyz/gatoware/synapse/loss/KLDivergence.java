@@ -3,6 +3,7 @@ package xyz.gatoware.synapse.loss;
 import xyz.gatoware.synapse.matrix.Matrix;
 
 public class KLDivergence implements LossFunction {
+	/** Calculates Kullback-Leibler divergence. */
 	@Override
 	public float calculate(Matrix predicted, Matrix actual) {
 		validateDimensions(predicted, actual);
@@ -25,6 +26,7 @@ public class KLDivergence implements LossFunction {
 		return loss / predicted.rows();
 	}
 
+	/** Calculates the Kullback-Leibler divergence gradient. */
 	@Override
 	public Matrix gradient(Matrix predicted, Matrix actual) {
 		validateDimensions(predicted, actual);

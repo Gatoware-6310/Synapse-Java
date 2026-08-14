@@ -3,8 +3,10 @@ package xyz.gatoware.synapse.loss;
 import xyz.gatoware.synapse.matrix.Matrix;
 
 public interface LossFunction {
+	/** Calculates the loss between predicted and actual values. */
 	float calculate(Matrix predicted, Matrix actual);
 
+	/** Calculates the gradient of the loss with respect to the predicted values. */
 	default Matrix gradient(Matrix predicted, Matrix actual) {
 		float epsilon = 1e-3f;
 		Matrix gradient = new Matrix(predicted.rows(), predicted.columns());

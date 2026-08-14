@@ -5,10 +5,12 @@ import xyz.gatoware.synapse.matrix.Matrix;
 public class HuberLoss implements LossFunction {
 	private final float delta;
 
+	/** Creates a Huber loss with delta equal to 1. */
 	public HuberLoss() {
 		this(1.0f);
 	}
 
+	/** Creates a Huber loss with the given delta. */
 	public HuberLoss(float delta) {
 		if (delta <= 0) {
 			throw new IllegalArgumentException("Delta must be positive");
@@ -16,6 +18,7 @@ public class HuberLoss implements LossFunction {
 		this.delta = delta;
 	}
 
+	/** Calculates Huber loss. */
 	@Override
 	public float calculate(Matrix predicted, Matrix actual) {
 		validateDimensions(predicted, actual);
@@ -33,6 +36,7 @@ public class HuberLoss implements LossFunction {
 		return loss / (predicted.rows() * predicted.columns());
 	}
 
+	/** Calculates the Huber-loss gradient. */
 	@Override
 	public Matrix gradient(Matrix predicted, Matrix actual) {
 		validateDimensions(predicted, actual);

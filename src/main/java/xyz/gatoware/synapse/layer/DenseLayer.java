@@ -12,6 +12,7 @@ public class DenseLayer implements Layer {
 	private Matrix lastWeightedInput;
 	private Matrix lastOutput;
 
+	/** Creates a dense layer with randomly initialized weights. */
 	public DenseLayer(int inputSize, int outputSize, ActivationFunction activationFunction) {
 		this.activationFunction = activationFunction;
 		this.weights = new Matrix(outputSize, inputSize);
@@ -25,6 +26,7 @@ public class DenseLayer implements Layer {
 		}
 	}
 
+	/** Creates a dense layer from weights, biases, and an activation function. */
 	public DenseLayer(Matrix weights, Matrix biases, ActivationFunction activationFunction) {
 		if (weights.rows() != biases.rows() || biases.columns() != 1) {
 			throw new IllegalArgumentException("Dense layer biases must have dimensions " + weights.rows() + " x 1");
@@ -36,6 +38,7 @@ public class DenseLayer implements Layer {
 	}
 
 	@Override
+	/** Runs the input through the dense layer. */
 	public Matrix forward(Matrix input) {
 		if (input.rows() != weights.columns() || input.columns() != 1) {
 			throw new IllegalArgumentException("Dense layer input must have dimensions " + weights.columns() + " x 1");
@@ -48,6 +51,7 @@ public class DenseLayer implements Layer {
 	}
 
 	@Override
+	/** Updates the layer using backpropagation and returns the input gradient. */
 	public Matrix backward(Matrix outputGradient, float learningRate) {
 		if (lastInput == null)
 			throw new IllegalStateException("Dense layer must run forward before backward");
@@ -81,14 +85,17 @@ public class DenseLayer implements Layer {
 		return inputGradient;
 	}
 
+	/** Returns the layer weights. */
 	public Matrix getWeights() {
 		return weights;
 	}
 
+	/** Returns the layer biases. */
 	public Matrix getBiases() {
 		return biases;
 	}
 
+	/** Returns the layer activation function. */
 	public ActivationFunction getActivationFunction() {
 		return activationFunction;
 	}

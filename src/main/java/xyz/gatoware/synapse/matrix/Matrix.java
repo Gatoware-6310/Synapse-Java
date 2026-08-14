@@ -7,6 +7,7 @@ public class Matrix {
 	private int columns;
 	public float[][] values;
 
+	/** Creates a matrix with the given amount of rows and columns. */
 	public Matrix(int rows, int columns) {
 		this.rows = rows;
 		this.columns = columns;
@@ -14,6 +15,7 @@ public class Matrix {
 		this.values = new float[rows][columns];
 	}
 
+	/** Creates a matrix from floating point values. */
 	public Matrix(float[][] values) {
 		this.values = values;
 
@@ -21,6 +23,7 @@ public class Matrix {
 		this.columns = values[0].length;
 	}
 
+	/** Returns a copy of this matrix. */
 	public Matrix copy() {
 		float[][] copy = new float[this.rows][this.columns];
 		for (int i = 0; i < this.rows; i++)
@@ -29,6 +32,7 @@ public class Matrix {
 		return new Matrix(copy);
 	}
 
+	/** Transposes this matrix and returns it. */
 	public Matrix transpose() {
 		float[][] m = this.values;
 
@@ -41,6 +45,7 @@ public class Matrix {
 		return this;
 	}
 
+	/** Adds another matrix to this matrix and returns it. */
 	public Matrix add(Matrix m2) {
 		if (this.columns() != m2.columns() || this.rows() != m2.rows()) {
 			throw new IllegalArgumentException("Matrix dimensions are incompatible!");
@@ -58,6 +63,7 @@ public class Matrix {
 		return this;
 	}
 
+	/** Subtracts another matrix from this matrix and returns it. */
 	public Matrix subtract(Matrix m2) {
 		if (this.columns() != m2.columns() || this.rows() != m2.rows()) {
 			throw new IllegalArgumentException("Matrix dimensions are incompatible!");
@@ -75,6 +81,7 @@ public class Matrix {
 		return this;
 	}
 
+	/** Multiplies this matrix by another matrix and returns it. */
 	public Matrix multiply(Matrix m2) {
 		if (this.columns() != m2.rows()) {
 			throw new IllegalArgumentException("Matrix dimensions are incompatible!");
@@ -94,6 +101,7 @@ public class Matrix {
 		return this;
 	}
 
+	/** Multiplies every value in this matrix by a scalar and returns it. */
 	public Matrix multiply(float scalar) {
 		for (int i = 0; i < this.rows; i++) {
 			for (int j = 0; j < this.columns; j++) {
@@ -103,6 +111,7 @@ public class Matrix {
 		return this;
 	}
 
+	/** Multiplies this matrix element by element with another matrix and returns it. */
 	public Matrix multiply_hadamard(Matrix m2) {
 		if (this.columns() != m2.columns() || this.rows() != m2.rows()) {
 			throw new IllegalArgumentException("Matrix dimensions are incompatible!");
@@ -117,6 +126,7 @@ public class Matrix {
 		return this;
 	}
 
+	/** Applies an activation function to every value in this matrix and returns it. */
 	public Matrix apply(ActivationFunction func) {
 		if (rows == 1 || columns == 1) {
 			float[] vector = new float[Math.max(rows, columns)];
@@ -140,10 +150,12 @@ public class Matrix {
 		return this;
 	}
 
+	/** Returns the amount of rows in this matrix. */
 	public int rows() {
 		return rows;
 	}
 
+	/** Returns the amount of columns in this matrix. */
 	public int columns() {
 		return columns;
 	}

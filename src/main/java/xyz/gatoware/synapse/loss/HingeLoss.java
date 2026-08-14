@@ -3,6 +3,7 @@ package xyz.gatoware.synapse.loss;
 import xyz.gatoware.synapse.matrix.Matrix;
 
 public class HingeLoss implements LossFunction {
+	/** Calculates hinge loss. */
 	@Override
 	public float calculate(Matrix predicted, Matrix actual) {
 		validateDimensions(predicted, actual);
@@ -17,6 +18,7 @@ public class HingeLoss implements LossFunction {
 		return loss / (predicted.rows() * predicted.columns());
 	}
 
+	/** Calculates the hinge-loss gradient. */
 	@Override
 	public Matrix gradient(Matrix predicted, Matrix actual) {
 		validateDimensions(predicted, actual);

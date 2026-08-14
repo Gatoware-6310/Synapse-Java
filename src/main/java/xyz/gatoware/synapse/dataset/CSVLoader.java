@@ -9,10 +9,12 @@ import xyz.gatoware.synapse.matrix.Matrix;
 
 public class CSVLoader {
 
+	/** Loads a CSV dataset, treating the first value in each row as an integer label or scalar target. */
 	public static Dataset loadDataset(final String filename) {
 		return loadDataset(filename, 1);
 	}
 
+	/** Loads a CSV dataset, treating the first targetSize values in each row as the target vector and the remaining values as input data. */
 	public static Dataset loadDataset(final String filename, final int targetSize) {
 		if (targetSize <= 0)
 			throw new IllegalArgumentException("Target size must be positive");

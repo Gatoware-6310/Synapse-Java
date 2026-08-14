@@ -3,6 +3,7 @@ package xyz.gatoware.synapse.loss;
 import xyz.gatoware.synapse.matrix.Matrix;
 
 public class MeanAbsoluteError implements LossFunction {
+	/** Calculates mean absolute error. */
 	@Override
 	public float calculate(Matrix predicted, Matrix actual) {
 		validateDimensions(predicted, actual);
@@ -17,6 +18,7 @@ public class MeanAbsoluteError implements LossFunction {
 		return loss / (predicted.rows() * predicted.columns());
 	}
 
+	/** Calculates the mean absolute error gradient. */
 	@Override
 	public Matrix gradient(Matrix predicted, Matrix actual) {
 		validateDimensions(predicted, actual);

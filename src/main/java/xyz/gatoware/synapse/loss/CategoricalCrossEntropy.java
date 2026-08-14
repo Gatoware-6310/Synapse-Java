@@ -3,6 +3,7 @@ package xyz.gatoware.synapse.loss;
 import xyz.gatoware.synapse.matrix.Matrix;
 
 public class CategoricalCrossEntropy implements LossFunction {
+	/** Calculates categorical cross-entropy loss. */
 	@Override
 	public float calculate(Matrix predicted, Matrix actual) {
 		if (predicted.rows() != actual.rows() || predicted.columns() != actual.columns()) {
@@ -25,6 +26,7 @@ public class CategoricalCrossEntropy implements LossFunction {
 		return -loss / predicted.rows();
 	}
 
+	/** Calculates the categorical cross-entropy gradient. */
 	@Override
 	public Matrix gradient(Matrix predicted, Matrix actual) {
 		if (predicted.rows() != actual.rows() || predicted.columns() != actual.columns()) {

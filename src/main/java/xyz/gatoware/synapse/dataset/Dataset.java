@@ -7,6 +7,7 @@ public class Dataset {
 	private Matrix targets;
 	private int size;
 
+	/** Creates a dataset from input and target matrices. Each row in inputs corresponds to the same row in targets. */
 	public Dataset(Matrix inputs, Matrix targets) {
 		if (inputs.rows() != targets.rows())
 			throw new IllegalArgumentException("Inputs and targets must have the same amount of rows!");
@@ -16,6 +17,7 @@ public class Dataset {
 		this.size = inputs.rows(); /* Either inputs.rows or targets.rows works - we verified they're the same. */
 	}
 
+	/** Returns the input matrix. */
 	public Matrix getInputs() {
 		return inputs;
 	}
@@ -31,10 +33,12 @@ public class Dataset {
 		return input;
 	}
 
+	/** Replaces the input matrix. */
 	public void setInputs(Matrix inputs) {
 		this.inputs = inputs;
 	}
 
+	/** Returns the target matrix. */
 	public Matrix getTargets() {
 		return targets;
 	}
@@ -50,10 +54,12 @@ public class Dataset {
 		return target;
 	}
 
+	/** Returns the amount of samples in the dataset. */
 	public int size() {
 		return size;
 	}
 
+	/** Replaces the target matrix. */
 	public void setTargets(Matrix targets) {
 		this.targets = targets;
 	}

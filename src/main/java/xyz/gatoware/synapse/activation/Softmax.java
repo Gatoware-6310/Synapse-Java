@@ -1,11 +1,13 @@
 package xyz.gatoware.synapse.activation;
 
 public class Softmax implements ActivationFunction {
+	/** Returns 1 for scalar application; Softmax is applied to vectors. */
 	@Override
 	public float apply(float num) {
 		return 1.0f;
 	}
 
+	/** Applies Softmax to a vector of values. */
 	public float[] apply(float[] values) {
 		if (values.length == 0) {
 			return new float[0];
@@ -19,6 +21,7 @@ public class Softmax implements ActivationFunction {
 		return result;
 	}
 
+	/** Applies the Softmax Jacobian to a vector of gradients. */
 	@Override
 	public float[] backward(float[] inputs, float[] outputs, float[] gradients) {
 		if (inputs.length != outputs.length || outputs.length != gradients.length)

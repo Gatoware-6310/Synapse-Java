@@ -1,14 +1,16 @@
 package xyz.gatoware.synapse.activation;
 
 public interface ActivationFunction {
-	/* Apply the activation on any number */
+	/** Applies the activation to a number. */
 	float apply(float num);
 
+	/** Returns the derivative of the activation for an input and its output. */
 	default float derivative(float input, float output) {
 		float epsilon = 1e-3f;
 		return (apply(input + epsilon) - apply(input - epsilon)) / (2.0f * epsilon);
 	}
 
+	/** Applies the activation to every value in an array. */
 	default float[] apply(float[] values) {
 		float[] result = values.clone();
 		for (int i = 0; i < result.length; i++)
@@ -16,6 +18,7 @@ public interface ActivationFunction {
 		return result;
 	}
 
+	/** Applies the activation derivative to a vector of gradients. */
 	default float[] backward(float[] inputs, float[] outputs, float[] gradients) {
 		if (inputs.length != outputs.length || outputs.length != gradients.length)
 			throw new IllegalArgumentException("Activation vectors must have the same length");

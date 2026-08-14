@@ -3,6 +3,7 @@ package xyz.gatoware.synapse.loss;
 import xyz.gatoware.synapse.matrix.Matrix;
 
 public class SparseCategoricalCrossEntropy implements LossFunction {
+	/** Calculates sparse categorical cross-entropy loss for integer class labels. */
 	@Override
 	public float calculate(Matrix predicted, Matrix actual) {
 		if (predicted.rows() != actual.rows() || actual.columns() != 1) {
@@ -28,6 +29,7 @@ public class SparseCategoricalCrossEntropy implements LossFunction {
 		return -loss / predicted.rows();
 	}
 
+	/** Calculates the sparse categorical cross-entropy gradient. */
 	@Override
 	public Matrix gradient(Matrix predicted, Matrix actual) {
 		validate(predicted, actual);
