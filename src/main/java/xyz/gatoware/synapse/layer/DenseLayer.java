@@ -1,5 +1,7 @@
 package xyz.gatoware.synapse.layer;
 
+import java.util.Arrays;
+
 import xyz.gatoware.synapse.activation.ActivationFunction;
 import xyz.gatoware.synapse.matrix.Matrix;
 
@@ -12,6 +14,11 @@ public class DenseLayer implements Layer {
 	private Matrix lastInput;
 	private Matrix lastWeightedInput;
 	private Matrix lastOutput;
+	private float[] weightedInputValues;
+	private float[] outputValues;
+	private float[] outputGradientValues;
+	private float[] weightedGradient;
+	private float[] inputGradientValues;
 
 	/** Creates a dense layer with randomly initialized weights.
 	 * @param inputSize the amount of inputs
@@ -56,9 +63,25 @@ public class DenseLayer implements Layer {
 			throw new IllegalArgumentException("Dense layer input must have dimensions " + weights.columns() + " x 1");
 		}
 
-		lastInput = input.copy();
-		lastWeightedInput = weights.copy().multiply(input).add(biases);
-		lastOutput = lastWeightedInput.copy().apply(activationFunction);
+		int inputSize = weights.columns();
+		int outputSize = weights.rows();
+		ensureTrainingBuffers(inputSize, outputSize);
+
+		for (int i = 0; i < inputSize; i++)
+			lastInput.values[i][0] = input.values[i][0];
+
+		for (int neuron = 0; neuron < outputSize; neuron++) {
+			float[] neuronWeights = weights.values[neuron];
+			float sum = biases.values[neuron][0];
+			for (int i = 0; i < inputSize; i++)
+				sum += neuronWeights[i] * input.values[i][0];
+			lastWeightedInput.values[neuron][0] = sum;
+			weightedInputValues[neuron] = sum;
+		}
+
+		activationFunction.apply(weightedInputValues, outputValues);
+		for (int neuron = 0; neuron < outputSize; neuron++)
+			lastOutput.values[neuron][0] = outputValues[neuron];
 		return lastOutput.copy();
 	}
 
@@ -76,29 +99,44 @@ public class DenseLayer implements Layer {
 		if (!Float.isFinite(learningRate) || learningRate <= 0.0f)
 			throw new IllegalArgumentException("Learning rate must be positive and finite");
 
-		float[] weightedInput = new float[weights.rows()];
-		float[] output = new float[weights.rows()];
-		float[] gradient = new float[weights.rows()];
 		for (int i = 0; i < weights.rows(); i++) {
-			weightedInput[i] = lastWeightedInput.values[i][0];
-			output[i] = lastOutput.values[i][0];
-			gradient[i] = outputGradient.values[i][0];
+			weightedInputValues[i] = lastWeightedInput.values[i][0];
+			outputValues[i] = lastOutput.values[i][0];
+			outputGradientValues[i] = outputGradient.values[i][0];
 		}
-		float[] weightedGradient = activationFunction.backward(weightedInput, output, gradient);
+		activationFunction.backward(weightedInputValues, outputValues, outputGradientValues, weightedGradient);
 
 		Matrix inputGradient = new Matrix(weights.columns(), 1);
-		for (int input = 0; input < weights.columns(); input++) {
-			for (int neuron = 0; neuron < weights.rows(); neuron++)
-				inputGradient.values[input][0] += weights.values[neuron][input] * weightedGradient[neuron];
-		}
-
+		Arrays.fill(inputGradientValues, 0.0f);
 		for (int neuron = 0; neuron < weights.rows(); neuron++) {
-			for (int input = 0; input < weights.columns(); input++)
-				weights.values[neuron][input] -= learningRate * weightedGradient[neuron] * lastInput.values[input][0];
+			float gradient = weightedGradient[neuron];
+			float scaledGradient = learningRate * gradient;
+			float[] neuronWeights = weights.values[neuron];
+			for (int input = 0; input < weights.columns(); input++) {
+				inputGradientValues[input] += neuronWeights[input] * gradient;
+				neuronWeights[input] -= scaledGradient * lastInput.values[input][0];
+			}
 			biases.values[neuron][0] -= learningRate * weightedGradient[neuron];
 		}
+		for (int input = 0; input < weights.columns(); input++)
+			inputGradient.values[input][0] = inputGradientValues[input];
 
 		return inputGradient;
+	}
+
+	private void ensureTrainingBuffers(int inputSize, int outputSize) {
+		if (lastInput == null || lastInput.rows() != inputSize) {
+			lastInput = new Matrix(inputSize, 1);
+			inputGradientValues = new float[inputSize];
+		}
+		if (lastWeightedInput == null || lastWeightedInput.rows() != outputSize) {
+			lastWeightedInput = new Matrix(outputSize, 1);
+			lastOutput = new Matrix(outputSize, 1);
+			weightedInputValues = new float[outputSize];
+			outputValues = new float[outputSize];
+			outputGradientValues = new float[outputSize];
+			weightedGradient = new float[outputSize];
+		}
 	}
 
 	/** Returns the layer weights.
