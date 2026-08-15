@@ -52,7 +52,12 @@ public class NeuralNetwork {
 		}
 	}
 
-
+	/** An easier way to instantiate a neural network - creates a neural network with the specified amount of inputs, layers, and outputs.
+	 * @param inputs the amount of inputs taken
+	 * @param layerSize the amount of neurons per layer
+	 * @param layers the amount of layers
+	 * @param outputs the amount of outputs
+	 */
 	public NeuralNetwork(int inputs, int layerSize, int layers, int outputs) {
 		if (inputs <= 0)
 		throw new IllegalArgumentException("inputs must be greater than 0");
