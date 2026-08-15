@@ -1,6 +1,26 @@
-# Synapse
+# Synapse 0.1.1
 
 Synapse is a lightweight Neural Network library in both C and Java, this repo containing the Java version.
+
+## Creating Neural Networks
+In Synapse, there are several ways you can instantiate a Neural Network, with varying degrees of simplicity;
+
+```java
+// 1. Empty network, adding layers manually
+NeuralNetwork manual = new NeuralNetwork();
+manual.addLayer(new DenseLayer(784, 128, new ReLU()));
+manual.addLayer(new DenseLayer(128, 10, new Softmax()));
+
+// 2. Define all layers immediately
+NeuralNetwork defined = new NeuralNetwork(new Layer[] {
+	new DenseLayer(784, 128, new ReLU()),
+	new DenseLayer(128, 10, new Softmax())
+});
+
+// 3. Simple constructor:
+// 784 inputs, 128 neurons/layer, 2 hidden layers, 10 outputs
+NeuralNetwork simple = new NeuralNetwork(784, 128, 2, 10);
+```
 
 ## Datasets
 Currently, CSV datasets are supported by Synapse, following this format:
