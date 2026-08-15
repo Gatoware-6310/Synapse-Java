@@ -69,9 +69,10 @@ public class Matrix {
 		int cols = this.columns();
 
 		for (int i = 0; i < rows; i++) {
-			for (int j = 0; j < cols; j++) {
-				this.values[i][j] += m2.values[i][j];
-			}
+			float[] leftRow = this.values[i];
+			float[] rightRow = m2.values[i];
+			for (int j = 0; j < cols; j++)
+				leftRow[j] += rightRow[j];
 		}
 
 		return this;
@@ -107,17 +108,34 @@ public class Matrix {
 			throw new IllegalArgumentException("Matrix dimensions are incompatible!");
 		}
 
-		float[][] product = new float[this.rows][m2.columns];
+		int resultColumns = m2.columns;
+		float[][] product = new float[this.rows][resultColumns];
+		if (resultColumns == 1) {
+			for (int i = 0; i < this.rows; i++) {
+				float sum = 0.0f;
+				float[] leftRow = this.values[i];
+				for (int k = 0; k < this.columns; k++)
+					sum += leftRow[k] * m2.values[k][0];
+				product[i][0] = sum;
+			}
+			this.values = product;
+			this.columns = 1;
+			return this;
+		}
+
 		for (int i = 0; i < this.rows; i++) {
-			for (int j = 0; j < m2.columns; j++) {
-				for (int k = 0; k < this.columns; k++) {
-					product[i][j] += this.values[i][k] * m2.values[k][j];
-				}
+			float[] leftRow = this.values[i];
+			float[] productRow = product[i];
+			for (int k = 0; k < this.columns; k++) {
+				float leftValue = leftRow[k];
+				float[] rightRow = m2.values[k];
+				for (int j = 0; j < resultColumns; j++)
+					productRow[j] += leftValue * rightRow[j];
 			}
 		}
 
 		this.values = product;
-		this.columns = m2.columns;
+		this.columns = resultColumns;
 		return this;
 	}
 

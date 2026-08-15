@@ -29,6 +29,17 @@ public interface ActivationFunction {
 		return result;
 	}
 
+	/** Applies the activation into an existing result array.
+	 * @param values the values to activate
+	 * @param result storage for the activated values
+	 */
+	default void apply(float[] values, float[] result) {
+		float[] applied = apply(values);
+		if (applied.length != result.length)
+			throw new IllegalArgumentException("Activation vectors must have the same length");
+		System.arraycopy(applied, 0, result, 0, result.length);
+	}
+
 	/** Applies the activation derivative to a vector of gradients.
 	 * @param inputs the activation inputs
 	 * @param outputs the activation outputs
@@ -43,5 +54,21 @@ public interface ActivationFunction {
 		for (int i = 0; i < result.length; i++)
 			result[i] = gradients[i] * derivative(inputs[i], outputs[i]);
 		return result;
+	}
+
+	/** Applies the activation derivative into an existing result array.
+	 * @param inputs the activation inputs
+	 * @param outputs the activation outputs
+	 * @param gradients the output gradients
+	 * @param result storage for the input gradients
+	 */
+	default void backward(float[] inputs, float[] outputs, float[] gradients, float[] result) {
+		if (inputs.length != outputs.length || outputs.length != gradients.length || gradients.length != result.length)
+			throw new IllegalArgumentException("Activation vectors must have the same length");
+
+		float[] inputGradients = backward(inputs, outputs, gradients);
+		if (inputGradients.length != result.length)
+			throw new IllegalArgumentException("Activation vectors must have the same length");
+		System.arraycopy(inputGradients, 0, result, 0, result.length);
 	}
 }
