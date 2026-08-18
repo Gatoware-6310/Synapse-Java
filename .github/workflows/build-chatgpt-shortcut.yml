@@ -25,11 +25,6 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
-      - name: Ensure Android SDK 35
-        run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
-
       - name: Build debug APK
         working-directory: chatgpt-shortcut
         run: gradle :app:assembleDebug --stacktrace
