@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">ChatGPT Shortcut</string>
+    <string name="automation_service_label">ChatGPT prompt automation</string>
+    <string name="automation_service_description">Fills and sends your dictated prompt inside the ChatGPT app, then returns Home.</string>
+    <string name="shortcut_description">Open a small listener, dictate a ChatGPT request, and send it through the installed ChatGPT app.</string>
+    <string name="shortcut_summary">Hold both volume keys to dictate to ChatGPT.</string>
+    <string name="notification_listener_label">ChatGPT completion listener</string>
+</resources>
