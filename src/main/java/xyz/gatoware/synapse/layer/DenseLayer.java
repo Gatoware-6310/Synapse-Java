@@ -4,6 +4,8 @@ import java.util.Arrays;
 
 import xyz.gatoware.synapse.activation.ActivationFunction;
 import xyz.gatoware.synapse.matrix.Matrix;
+import xyz.gatoware.synapse.optimizer.Optimizer;
+import xyz.gatoware.synapse.optimizer.SGD;
 
 /** A fully connected neural network layer. */
 public class DenseLayer implements Layer {
@@ -14,6 +16,8 @@ public class DenseLayer implements Layer {
 	private Matrix lastInput;
 	private Matrix lastWeightedInput;
 	private Matrix lastOutput;
+	private Matrix weightGradients;
+	private Matrix biasGradients;
 	private float[] weightedInputValues;
 	private float[] outputValues;
 	private float[] outputGradientValues;
@@ -86,18 +90,31 @@ public class DenseLayer implements Layer {
 	}
 
 	@Override
-	/** Updates the layer using backpropagation and returns the input gradient.
+	/** Updates the layer using backpropagation and stochastic gradient descent, then returns the input gradient.
 	 * @param outputGradient the gradient at the layer output
 	 * @param learningRate the training learning rate
 	 * @return the gradient at the layer input
 	 */
 	public Matrix backward(Matrix outputGradient, float learningRate) {
+		return backward(outputGradient, learningRate, new SGD());
+	}
+
+	@Override
+	/** Updates the layer using backpropagation and the given optimizer, then returns the input gradient.
+	 * @param outputGradient the gradient at the layer output
+	 * @param learningRate the training learning rate
+	 * @param optimizer the optimizer used to update weights and biases
+	 * @return the gradient at the layer input
+	 */
+	public Matrix backward(Matrix outputGradient, float learningRate, Optimizer optimizer) {
 		if (lastInput == null)
 			throw new IllegalStateException("Dense layer must run forward before backward");
 		if (outputGradient.rows() != weights.rows() || outputGradient.columns() != 1)
 			throw new IllegalArgumentException("Dense layer output gradient must have dimensions " + weights.rows() + " x 1");
 		if (!Float.isFinite(learningRate) || learningRate <= 0.0f)
 			throw new IllegalArgumentException("Learning rate must be positive and finite");
+		if (optimizer == null)
+			throw new IllegalArgumentException("Optimizer cannot be null");
 
 		for (int i = 0; i < weights.rows(); i++) {
 			weightedInputValues[i] = lastWeightedInput.values[i][0];
@@ -110,17 +127,18 @@ public class DenseLayer implements Layer {
 		Arrays.fill(inputGradientValues, 0.0f);
 		for (int neuron = 0; neuron < weights.rows(); neuron++) {
 			float gradient = weightedGradient[neuron];
-			float scaledGradient = learningRate * gradient;
 			float[] neuronWeights = weights.values[neuron];
 			for (int input = 0; input < weights.columns(); input++) {
 				inputGradientValues[input] += neuronWeights[input] * gradient;
-				neuronWeights[input] -= scaledGradient * lastInput.values[input][0];
+				weightGradients.values[neuron][input] = gradient * lastInput.values[input][0];
 			}
-			biases.values[neuron][0] -= learningRate * weightedGradient[neuron];
+			biasGradients.values[neuron][0] = gradient;
 		}
 		for (int input = 0; input < weights.columns(); input++)
 			inputGradient.values[input][0] = inputGradientValues[input];
 
+		optimizer.update(weights, weightGradients, learningRate);
+		optimizer.update(biases, biasGradients, learningRate);
 		return inputGradient;
 	}
 
@@ -132,6 +150,8 @@ public class DenseLayer implements Layer {
 		if (lastWeightedInput == null || lastWeightedInput.rows() != outputSize) {
 			lastWeightedInput = new Matrix(outputSize, 1);
 			lastOutput = new Matrix(outputSize, 1);
+			weightGradients = new Matrix(outputSize, inputSize);
+			biasGradients = new Matrix(outputSize, 1);
 			weightedInputValues = new float[outputSize];
 			outputValues = new float[outputSize];
 			outputGradientValues = new float[outputSize];

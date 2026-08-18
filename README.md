@@ -67,7 +67,7 @@ Additionally, matrices are defined by the `Matrix` class, and are essentially ju
 Crucially, a matrix's values can only ever be floating point numbers.
 
 ## Training models
-For datasets containing integer class labels, the simplest form of `fit` uses `SparseCategoricalCrossEntropy` by default:
+For datasets containing integer class labels, the simplest form of `fit` uses `SparseCategoricalCrossEntropy` and the `Adam` optimizer by default:
 
 ```java
 NeuralNetwork network = new NeuralNetwork(new Layer[] {
@@ -75,9 +75,7 @@ NeuralNetwork network = new NeuralNetwork(new Layer[] {
 	new DenseLayer(3, 2, new Softmax())
 });
 
-// `network.fit` takes arguments `Dataset dataset`, `int epochs`, `float learningRate`, and `boolean logging`
-
-network.fit(dataset, 10, 0.01f);
+network.fit(dataset, 10, 0.001f);
 ```
 
 For simple fully-connected networks, Synapse can also construct the layers automatically by passing the input size, hidden layer size, amount of hidden layers, and output size:
@@ -88,9 +86,25 @@ NeuralNetwork network = new NeuralNetwork(784, 128, 3, 10);
 
 This creates three hidden layers with 128 neurons each using `ReLU`, followed by a 10-neuron `Softmax` output layer. Passing `0` hidden layers creates a direct input-to-output `Softmax` layer instead.
 
+A custom loss function and optimizer can both be passed explicitly:
+
 ```java
-network.fit(dataset, new MeanSquaredError(), 100, 0.001f);
+network.fit(dataset, new MeanSquaredError(), 100, 0.001f, new RMSProp());
 ```
+
+Or, while keeping the default loss function:
+
+```java
+network.fit(dataset, 100, 0.01f, new SGD());
+```
+
+Optimizers included with Synapse are:
+
+- `Adam` (default)
+- `SGD`
+- `Momentum`
+- `AdaGrad`
+- `RMSProp`
 
 Other loss functions that Synapse includes are:
 
@@ -118,7 +132,8 @@ Other activation functions that Synapse includes are:
 Logging can be enabled by passing `true` as the final argument. This prints the average loss and classification accuracy after every epoch:
 
 ```java
-network.fit(dataset, 10, 0.01f, true);
+network.fit(dataset, 10, 0.001f, true);
+network.fit(dataset, 10, 0.01f, new SGD(), true);
 ```
 
 The most recent average loss is also available after training with `getLastLoss()`, e.g,

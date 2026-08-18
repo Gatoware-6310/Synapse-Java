@@ -27,6 +27,8 @@ import xyz.gatoware.synapse.layer.Layer;
 import xyz.gatoware.synapse.loss.LossFunction;
 import xyz.gatoware.synapse.loss.SparseCategoricalCrossEntropy;
 import xyz.gatoware.synapse.matrix.Matrix;
+import xyz.gatoware.synapse.optimizer.Adam;
+import xyz.gatoware.synapse.optimizer.Optimizer;
 
 /** A lightweight neural network composed of layers. */
 public class NeuralNetwork {
@@ -84,7 +86,6 @@ public class NeuralNetwork {
 		addLayer(new DenseLayer(layerSize, outputs, new Softmax()));
 	}
 
-
 	/** Adds a layer to the neural network.
 	 * @param layer the layer to add
 	 */
@@ -104,17 +105,29 @@ public class NeuralNetwork {
 		return output;
 	}
 
-	/** Trains the network on a dataset using the given loss function.
+	/** Trains the network on a dataset using the given loss function and Adam optimizer.
 	 * @param dataset the dataset to train on
 	 * @param lossFunction the loss function to use
 	 * @param epochs the amount of training epochs
 	 * @param learningRate the training learning rate
 	 */
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate) {
-		fit(dataset, lossFunction, epochs, learningRate, false);
+		fit(dataset, lossFunction, epochs, learningRate, new Adam(), false);
 	}
 
-	/** Trains the network on a dataset using the given loss function, optionally logging the average loss and classification accuracy after every epoch.
+	/** Trains the network on a dataset using the given loss function and optimizer.
+	 * @param dataset the dataset to train on
+	 * @param lossFunction the loss function to use
+	 * @param epochs the amount of training epochs
+	 * @param learningRate the training learning rate
+	 * @param optimizer the optimizer to use
+	 */
+	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
+			final Optimizer optimizer) {
+		fit(dataset, lossFunction, epochs, learningRate, optimizer, false);
+	}
+
+	/** Trains the network on a dataset using the given loss function and Adam optimizer, optionally logging the average loss and classification accuracy after every epoch.
 	 * @param dataset the dataset to train on
 	 * @param lossFunction the loss function to use
 	 * @param epochs the amount of training epochs
@@ -123,10 +136,25 @@ public class NeuralNetwork {
 	 */
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
 			final boolean logging) {
+		fit(dataset, lossFunction, epochs, learningRate, new Adam(), logging);
+	}
+
+	/** Trains the network on a dataset using the given loss function and optimizer, optionally logging the average loss and classification accuracy after every epoch.
+	 * @param dataset the dataset to train on
+	 * @param lossFunction the loss function to use
+	 * @param epochs the amount of training epochs
+	 * @param learningRate the training learning rate
+	 * @param optimizer the optimizer to use
+	 * @param logging whether to log after every epoch
+	 */
+	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
+			final Optimizer optimizer, final boolean logging) {
 		if (dataset == null)
 			throw new IllegalArgumentException("Dataset cannot be null");
 		if (lossFunction == null)
 			throw new IllegalArgumentException("Loss function cannot be null");
+		if (optimizer == null)
+			throw new IllegalArgumentException("Optimizer cannot be null");
 		if (dataset.size() == 0)
 			throw new IllegalArgumentException("Dataset cannot be empty");
 		if (layers.isEmpty())
@@ -153,7 +181,7 @@ public class NeuralNetwork {
 
 				Matrix gradient = columnVector(lossFunction.gradient(predicted, actual));
 				for (int layer = layers.size() - 1; layer >= 0; layer--)
-					gradient = layers.get(layer).backward(gradient, learningRate);
+					gradient = layers.get(layer).backward(gradient, learningRate, optimizer);
 			}
 
 			lastLoss = totalLoss / dataset.size();
@@ -165,23 +193,45 @@ public class NeuralNetwork {
 		}
 	}
 
-	/** Trains the network using SparseCategoricalCrossEntropy by default.
+	/** Trains the network using SparseCategoricalCrossEntropy and Adam by default.
 	 * @param dataset the dataset to train on
 	 * @param epochs the amount of training epochs
 	 * @param learningRate the training learning rate
 	 */
 	public void fit(final Dataset dataset, final int epochs, final float learningRate) {
-		fit(dataset, epochs, learningRate, false);
+		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, new Adam(), false);
 	}
 
-	/** Trains the network using SparseCategoricalCrossEntropy by default, optionally logging after every epoch.
+	/** Trains the network using SparseCategoricalCrossEntropy and the given optimizer.
+	 * @param dataset the dataset to train on
+	 * @param epochs the amount of training epochs
+	 * @param learningRate the training learning rate
+	 * @param optimizer the optimizer to use
+	 */
+	public void fit(final Dataset dataset, final int epochs, final float learningRate, final Optimizer optimizer) {
+		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, optimizer, false);
+	}
+
+	/** Trains the network using SparseCategoricalCrossEntropy and Adam by default, optionally logging after every epoch.
 	 * @param dataset the dataset to train on
 	 * @param epochs the amount of training epochs
 	 * @param learningRate the training learning rate
 	 * @param logging whether to log after every epoch
 	 */
 	public void fit(final Dataset dataset, final int epochs, final float learningRate, final boolean logging) {
-		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, logging);
+		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, new Adam(), logging);
+	}
+
+	/** Trains the network using SparseCategoricalCrossEntropy and the given optimizer, optionally logging after every epoch.
+	 * @param dataset the dataset to train on
+	 * @param epochs the amount of training epochs
+	 * @param learningRate the training learning rate
+	 * @param optimizer the optimizer to use
+	 * @param logging whether to log after every epoch
+	 */
+	public void fit(final Dataset dataset, final int epochs, final float learningRate, final Optimizer optimizer,
+			final boolean logging) {
+		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, optimizer, logging);
 	}
 
 	/** Returns the most recent average loss after training.
