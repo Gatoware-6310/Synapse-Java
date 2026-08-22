@@ -5,6 +5,7 @@ import xyz.gatoware.synapse.NeuralNetwork;
 import xyz.gatoware.synapse.Synapse;
 import xyz.gatoware.synapse.activation.ReLU;
 import xyz.gatoware.synapse.activation.Softmax;
+import xyz.gatoware.synapse.dataset.Dataset;
 import xyz.gatoware.synapse.layer.DenseLayer;
 import xyz.gatoware.synapse.layer.Layer;
 import xyz.gatoware.synapse.matrix.Matrix;
@@ -41,6 +42,7 @@ public final class CudaBenchmark {
 			benchmarkDenseForward(784, 1024, batch);
 		for (int batch : new int[] {1, 32, 128})
 			benchmarkNetworkForward(784, 1024, 3, 10, batch);
+		benchmarkTraining(256, 784, 256, 2, 10);
 		Synapse.useDevice(Devices.CPU);
 	}
 
@@ -110,6 +112,30 @@ public final class CudaBenchmark {
 		double cudaMs = timeMs(Devices.CUDA, () -> cudaNetwork.forward(input));
 		printResult("Network " + inputSize + " -> " + hiddenSize + " x" + hiddenLayers + " -> " + outputs
 			+ " batch " + batchSize, cpuMs, cudaMs);
+	}
+
+	private static void benchmarkTraining(int samples, int inputSize, int hiddenSize, int hiddenLayers, int outputs) {
+		Matrix inputs = new Matrix(randomValues(samples, inputSize));
+		Matrix targets = new Matrix(samples, 1);
+		for (int i = 0; i < samples; i++)
+			targets.values[i][0] = RANDOM.nextInt(outputs);
+		Dataset dataset = new Dataset(inputs, targets);
+
+		NeuralNetwork cpu = new NeuralNetwork(inputSize, hiddenSize, hiddenLayers, outputs);
+		NeuralNetwork cuda = new NeuralNetwork(inputSize, hiddenSize, hiddenLayers, outputs);
+
+		Synapse.useDevice(Devices.CPU);
+		long start = System.nanoTime();
+		cpu.fit(dataset, 1, 0.001f);
+		double cpuMs = (System.nanoTime() - start) / 1_000_000.0;
+
+		Synapse.useDevice(Devices.CUDA);
+		start = System.nanoTime();
+		cuda.fit(dataset, 1, 0.001f);
+		double cudaMs = (System.nanoTime() - start) / 1_000_000.0;
+
+		printResult("Training epoch " + samples + " samples, " + inputSize + " -> " + hiddenSize
+			+ " x" + hiddenLayers + " -> " + outputs, cpuMs, cudaMs);
 	}
 
 	private static double timeMs(Devices device, Runnable task) {
