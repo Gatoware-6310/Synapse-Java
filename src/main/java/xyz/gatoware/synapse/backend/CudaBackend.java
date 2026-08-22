@@ -7,19 +7,35 @@ import java.util.Map;
 
 import jcuda.Pointer;
 import jcuda.Sizeof;
+import jcuda.driver.CUfunction;
+import jcuda.driver.CUmodule;
+import jcuda.driver.JCudaDriver;
 import jcuda.jcublas.JCublas2;
 import jcuda.jcublas.cublasHandle;
 import jcuda.jcublas.cublasOperation;
+import jcuda.nvrtc.JNvrtc;
+import jcuda.nvrtc.nvrtcProgram;
 import jcuda.runtime.JCuda;
 import jcuda.runtime.cudaMemcpyKind;
+import xyz.gatoware.synapse.matrix.Matrix;
 
 /** Experimental CUDA backend backed by JCuda and cuBLAS. */
 public final class CudaBackend implements Backend {
-	/* Keep the hot cache deliberately small. Old entries are still safe because
-	 * their host values remain authoritative and can simply be uploaded again. */
 	private static final int MAX_CACHED_MATRICES = 16;
 	private static final int MAX_POOL_BUFFERS = 32;
 	private static final int MAX_POOL_PER_SIZE = 8;
+	private static final int KERNEL_BLOCK_SIZE = 256;
+	private static final String BIAS_RELU_SOURCE = """
+		extern \"C\" __global__ void bias_relu(float* data, const float* bias, int rows, int cols) {
+		    int index = blockIdx.x * blockDim.x + threadIdx.x;
+		    int count = rows * cols;
+		    if (index < count) {
+		        int row = index / cols;
+		        float value = data[index] + bias[row];
+		        data[index] = value > 0.0f ? value : 0.0f;
+		    }
+		}
+		""";
 
 	private final cublasHandle handle = new cublasHandle();
 	private final Map<float[][], DeviceBuffer> cache = new IdentityHashMap<>();
@@ -29,6 +45,10 @@ public final class CudaBackend implements Backend {
 	private final float[] betaValue = {0.0f};
 	private final Pointer alpha = Pointer.to(alphaValue);
 	private final Pointer beta = Pointer.to(betaValue);
+	private CUmodule reluModule;
+	private CUfunction biasReluFunction;
+	private boolean reluKernelAttempted;
+	private boolean reluKernelAvailable;
 	private int pooledBuffers;
 	private boolean closed;
 
@@ -49,35 +69,27 @@ public final class CudaBackend implements Backend {
 		try {
 			JCuda.setExceptionsEnabled(true);
 			JCublas2.setExceptionsEnabled(true);
-
 			int[] deviceCount = {0};
 			JCuda.cudaGetDeviceCount(deviceCount);
 			if (deviceCount[0] <= 0)
 				throw new IllegalStateException("No CUDA-capable NVIDIA device was found");
-
 			JCublas2.cublasCreate(handle);
 		} catch (Throwable error) {
-			throw new IllegalStateException(
-				"CUDA backend could not initialize: " + rootMessage(error), error);
+			throw new IllegalStateException("CUDA backend could not initialize: " + rootMessage(error), error);
 		}
 	}
 
-	/** Checks whether the complete CUDA backend can be initialized.
-	 * This verifies both the CUDA runtime/device and the cuBLAS native library.
-	 * @return whether CUDA is available
-	 */
+	/** Checks whether the complete CUDA/cuBLAS backend can initialize. */
 	public static boolean isAvailable() {
 		cublasHandle probeHandle = new cublasHandle();
 		boolean handleCreated = false;
 		try {
 			JCuda.setExceptionsEnabled(true);
 			JCublas2.setExceptionsEnabled(true);
-
 			int[] deviceCount = {0};
 			JCuda.cudaGetDeviceCount(deviceCount);
 			if (deviceCount[0] <= 0)
 				return false;
-
 			JCublas2.cublasCreate(probeHandle);
 			handleCreated = true;
 			return true;
@@ -88,7 +100,6 @@ public final class CudaBackend implements Backend {
 				try {
 					JCublas2.cublasDestroy(probeHandle);
 				} catch (Throwable ignored) {
-					// Availability probing must never leak native cleanup errors.
 				}
 			}
 		}
@@ -96,39 +107,13 @@ public final class CudaBackend implements Backend {
 
 	@Override
 	public synchronized float[][] multiply(float[][] left, float[][] right, int rows, int shared, int columns) {
-		if (closed)
-			throw new IllegalStateException("CUDA backend has already been closed");
-
+		ensureOpen();
 		DeviceBuffer deviceLeft = getOrUpload(left, rows, shared);
 		DeviceBuffer deviceRight = getOrUpload(right, shared, columns);
-		int resultElements = rows * columns;
-		DeviceBuffer deviceResult = acquire(resultElements);
+		DeviceBuffer deviceResult = multiplyDevice(deviceLeft, deviceRight, rows, shared, columns);
 		boolean resultOwned = true;
-
 		try {
-			/* cuBLAS is column-major. Swapping the row-major operands computes
-			 * C^T = B^T A^T without a separate transpose. */
-			JCublas2.cublasSgemm(handle,
-				cublasOperation.CUBLAS_OP_N,
-				cublasOperation.CUBLAS_OP_N,
-				columns,
-				rows,
-				shared,
-				alpha,
-				deviceRight.pointer,
-				columns,
-				deviceLeft.pointer,
-				shared,
-				beta,
-				deviceResult.pointer,
-				columns);
-
-			float[] hostResult = new float[resultElements];
-			long resultBytes = (long) resultElements * Sizeof.FLOAT;
-			JCuda.cudaMemcpy(Pointer.to(hostResult), deviceResult.pointer, resultBytes,
-				cudaMemcpyKind.cudaMemcpyDeviceToHost);
-			float[][] result = reshape(hostResult, rows, columns);
-
+			float[][] result = download(deviceResult, rows, columns);
 			cacheResult(result, deviceResult);
 			resultOwned = false;
 			return result;
@@ -136,6 +121,130 @@ public final class CudaBackend implements Backend {
 			if (resultOwned)
 				release(deviceResult);
 		}
+	}
+
+	/** Returns whether the fused resident Dense+ReLU inference path is available.
+	 * Failure to initialize NVRTC does not disable ordinary cuBLAS acceleration.
+	 */
+	public synchronized boolean supportsResidentRelu() {
+		ensureOpen();
+		return ensureReluKernel();
+	}
+
+	/** Computes weights*input + bias followed by ReLU entirely on the GPU.
+	 * The returned Matrix is an internal resident intermediate: its host values
+	 * are placeholders until a later materializing operation consumes it.
+	 */
+	public synchronized Matrix denseReluResident(Matrix weights, Matrix biases, Matrix input) {
+		ensureOpen();
+		if (!ensureReluKernel())
+			throw new IllegalStateException("GPU-resident ReLU kernel is unavailable");
+		if (weights.columns() != input.rows() || biases.rows() != weights.rows() || biases.columns() != 1)
+			throw new IllegalArgumentException("Incompatible dense layer dimensions");
+
+		int rows = weights.rows();
+		int shared = weights.columns();
+		int columns = input.columns();
+		DeviceBuffer deviceWeights = getOrUpload(weights.values, rows, shared);
+		DeviceBuffer deviceInput = getOrUpload(input.values, shared, columns);
+		DeviceBuffer deviceBias = getOrUpload(biases.values, rows, 1);
+		DeviceBuffer deviceResult = multiplyDevice(deviceWeights, deviceInput, rows, shared, columns);
+		boolean resultOwned = true;
+		try {
+			launchBiasRelu(deviceResult, deviceBias, rows, columns);
+			Matrix result = new Matrix(rows, columns);
+			cacheResult(result.values, deviceResult);
+			resultOwned = false;
+			return result;
+		} finally {
+			if (resultOwned)
+				release(deviceResult);
+		}
+	}
+
+	private DeviceBuffer multiplyDevice(DeviceBuffer left, DeviceBuffer right, int rows, int shared, int columns) {
+		DeviceBuffer result = acquire(rows * columns);
+		boolean owned = true;
+		try {
+			JCublas2.cublasSgemm(handle,
+				cublasOperation.CUBLAS_OP_N,
+				cublasOperation.CUBLAS_OP_N,
+				columns, rows, shared,
+				alpha,
+				right.pointer, columns,
+				left.pointer, shared,
+				beta,
+				result.pointer, columns);
+			owned = false;
+			return result;
+		} finally {
+			if (owned)
+				release(result);
+		}
+	}
+
+	private void launchBiasRelu(DeviceBuffer data, DeviceBuffer bias, int rows, int columns) {
+		int[] rowsArg = {rows};
+		int[] columnsArg = {columns};
+		Pointer kernelParameters = Pointer.to(
+			Pointer.to(data.pointer),
+			Pointer.to(bias.pointer),
+			Pointer.to(rowsArg),
+			Pointer.to(columnsArg));
+		int elements = rows * columns;
+		int blocks = (elements + KERNEL_BLOCK_SIZE - 1) / KERNEL_BLOCK_SIZE;
+		JCudaDriver.cuLaunchKernel(
+			biasReluFunction,
+			blocks, 1, 1,
+			KERNEL_BLOCK_SIZE, 1, 1,
+			0, null,
+			kernelParameters, null);
+	}
+
+	private boolean ensureReluKernel() {
+		if (reluKernelAttempted)
+			return reluKernelAvailable;
+		reluKernelAttempted = true;
+		nvrtcProgram program = new nvrtcProgram();
+		try {
+			JNvrtc.setExceptionsEnabled(true);
+			JCudaDriver.setExceptionsEnabled(true);
+			JCudaDriver.cuInit(0);
+			JNvrtc.nvrtcCreateProgram(program, BIAS_RELU_SOURCE, "synapse_bias_relu.cu", 0, null, null);
+			String[] options = {"--gpu-architecture=compute_52", "--use_fast_math"};
+			JNvrtc.nvrtcCompileProgram(program, options.length, options);
+			String[] ptx = new String[1];
+			JNvrtc.nvrtcGetPTX(program, ptx);
+			reluModule = new CUmodule();
+			biasReluFunction = new CUfunction();
+			JCudaDriver.cuModuleLoadData(reluModule, ptx[0]);
+			JCudaDriver.cuModuleGetFunction(biasReluFunction, reluModule, "bias_relu");
+			reluKernelAvailable = true;
+			return true;
+		} catch (Throwable ignored) {
+			if (reluModule != null) {
+				try {
+					JCudaDriver.cuModuleUnload(reluModule);
+				} catch (Throwable ignoredCleanup) {
+				}
+			}
+			reluModule = null;
+			biasReluFunction = null;
+			reluKernelAvailable = false;
+			return false;
+		} finally {
+			try {
+				JNvrtc.nvrtcDestroyProgram(program);
+			} catch (Throwable ignored) {
+			}
+		}
+	}
+
+	private float[][] download(DeviceBuffer buffer, int rows, int columns) {
+		float[] hostResult = new float[rows * columns];
+		JCuda.cudaMemcpy(Pointer.to(hostResult), buffer.pointer,
+			(long) hostResult.length * Sizeof.FLOAT, cudaMemcpyKind.cudaMemcpyDeviceToHost);
+		return reshape(hostResult, rows, columns);
 	}
 
 	private DeviceBuffer getOrUpload(float[][] matrix, int rows, int columns) {
@@ -152,9 +261,8 @@ public final class CudaBackend implements Backend {
 		boolean owned = true;
 		try {
 			float[] flattened = flatten(matrix, rows, columns);
-			long bytes = (long) elements * Sizeof.FLOAT;
-			JCuda.cudaMemcpy(buffer.pointer, Pointer.to(flattened), bytes,
-				cudaMemcpyKind.cudaMemcpyHostToDevice);
+			JCuda.cudaMemcpy(buffer.pointer, Pointer.to(flattened),
+				(long) elements * Sizeof.FLOAT, cudaMemcpyKind.cudaMemcpyHostToDevice);
 			putCached(matrix, buffer);
 			owned = false;
 			return buffer;
@@ -175,7 +283,6 @@ public final class CudaBackend implements Backend {
 				return new DeviceBuffer(pointer, elements);
 			}
 		}
-
 		Pointer pointer = new Pointer();
 		JCuda.cudaMalloc(pointer, (long) elements * Sizeof.FLOAT);
 		return new DeviceBuffer(pointer, elements);
@@ -234,6 +341,11 @@ public final class CudaBackend implements Backend {
 			removeCached(matrix, buffer);
 	}
 
+	private void ensureOpen() {
+		if (closed)
+			throw new IllegalStateException("CUDA backend has already been closed");
+	}
+
 	private static float[] flatten(float[][] matrix, int rows, int columns) {
 		float[] flattened = new float[rows * columns];
 		for (int row = 0; row < rows; row++)
@@ -260,18 +372,23 @@ public final class CudaBackend implements Backend {
 	public synchronized void close() {
 		if (closed)
 			return;
-
+		if (reluModule != null) {
+			try {
+				JCudaDriver.cuModuleUnload(reluModule);
+			} catch (Throwable ignored) {
+			}
+			reluModule = null;
+			biasReluFunction = null;
+		}
 		for (DeviceBuffer buffer : cache.values())
 			JCuda.cudaFree(buffer.pointer);
 		cache.clear();
 		cacheOrder.clear();
-
 		for (ArrayDeque<Pointer> pointers : bufferPool.values())
 			for (Pointer pointer : pointers)
 				JCuda.cudaFree(pointer);
 		bufferPool.clear();
 		pooledBuffers = 0;
-
 		JCublas2.cublasDestroy(handle);
 		closed = true;
 	}
