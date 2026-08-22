@@ -143,10 +143,10 @@ public class NeuralNetwork {
 		}
 	}
 
-	/** CUDA training uses mini-batches and keeps hidden dense/ReLU activations,
-	 * backprop GEMMs, gradients, and optimizer state on the GPU. For the standard
-	 * final Softmax + SparseCategoricalCrossEntropy pair, the derivative is fused
-	 * algebraically as (probabilities - one-hot), skipping the Softmax Jacobian.
+	/** CUDA training keeps the standard Dense/ReLU/Softmax classifier path on the GPU.
+	 * For Softmax + SparseCategoricalCrossEntropy, the final affine transform, bias,
+	 * stable Softmax, cross-entropy derivative, final-layer backward, and optimizer
+	 * update are fused into the CUDA backend without materializing probabilities.
 	 */
 	private void fitCuda(Dataset dataset, LossFunction lossFunction, int epochs, float learningRate,
 			Optimizer optimizer, boolean logging) {
@@ -154,8 +154,9 @@ public class NeuralNetwork {
 		Random random = new Random();
 		int featureCount = dataset.getInputs().columns();
 		int cudaBatchSize = Synapse.getCudaBatchSize();
+		int finalLayerIndex = layers.size() - 1;
 		boolean fusedSoftmaxCrossEntropy = lossFunction instanceof SparseCategoricalCrossEntropy
-			&& layers.get(layers.size() - 1) instanceof DenseLayer finalDense
+			&& layers.get(finalLayerIndex) instanceof DenseLayer finalDense
 			&& finalDense.getActivationFunction() instanceof Softmax
 			&& dataset.getTargets().columns() == 1;
 
@@ -173,36 +174,40 @@ public class NeuralNetwork {
 							batchInput.values[feature][sample] = dataset.getInputs().values[index][feature];
 					}
 
-					Matrix output = batchInput;
-					for (int layerIndex = 0; layerIndex < layers.size(); layerIndex++) {
-						DenseLayer dense = (DenseLayer) layers.get(layerIndex);
-						if (layerIndex < layers.size() - 1)
-							output = dense.forwardCudaResident(output);
-						else
-							output = dense.forward(output);
-					}
-
-					Matrix gradient;
 					if (fusedSoftmaxCrossEntropy) {
-						Matrix logitsGradient = new Matrix(output.rows(), batchSize);
+						Matrix hiddenOutput = batchInput;
+						for (int layerIndex = 0; layerIndex < finalLayerIndex; layerIndex++)
+							hiddenOutput = ((DenseLayer) layers.get(layerIndex)).forwardCudaResident(hiddenOutput);
+
+						int[] targets = new int[batchSize];
 						for (int sample = 0; sample < batchSize; sample++) {
 							int index = order[start + sample];
 							float classId = dataset.getTargets().values[index][0];
 							int target = (int) classId;
-							if (classId != target || target < 0 || target >= output.rows())
-								throw new IllegalArgumentException("Actual matrix must contain valid class IDs");
-
-							float probability = Math.max(1e-7f, Math.min(1.0f - 1e-7f, output.values[target][sample]));
-							totalLoss -= (float) Math.log(probability);
-							for (int neuron = 0; neuron < output.rows(); neuron++)
-								logitsGradient.values[neuron][sample] = output.values[neuron][sample];
-							logitsGradient.values[target][sample] -= 1.0f;
+							if (classId != target)
+								throw new IllegalArgumentException("Actual matrix must contain integer class IDs");
+							targets[sample] = target;
 						}
-						DenseLayer finalLayer = (DenseLayer) layers.get(layers.size() - 1);
-						gradient = finalLayer.backwardCudaPreactivated(logitsGradient, learningRate, optimizer);
-						for (int layerIndex = layers.size() - 2; layerIndex >= 0; layerIndex--)
+
+						DenseLayer finalLayer = (DenseLayer) layers.get(finalLayerIndex);
+						CudaBackend cuda = (CudaBackend) Synapse.backend();
+						CudaBackend.SoftmaxTrainingResult step = cuda.denseSoftmaxCrossEntropyBackwardUpdate(
+							finalLayer.getWeights(), finalLayer.getBiases(), hiddenOutput,
+							targets, optimizer, learningRate);
+						totalLoss += step.loss() * batchSize;
+						Matrix gradient = step.inputGradient();
+						for (int layerIndex = finalLayerIndex - 1; layerIndex >= 0; layerIndex--)
 							gradient = layers.get(layerIndex).backward(gradient, learningRate, optimizer);
 					} else {
+						Matrix output = batchInput;
+						for (int layerIndex = 0; layerIndex < layers.size(); layerIndex++) {
+							DenseLayer dense = (DenseLayer) layers.get(layerIndex);
+							if (layerIndex < finalLayerIndex)
+								output = dense.forwardCudaResident(output);
+							else
+								output = dense.forward(output);
+						}
+
 						Matrix outputGradient = new Matrix(output.rows(), batchSize);
 						for (int sample = 0; sample < batchSize; sample++) {
 							int index = order[start + sample];
@@ -215,8 +220,8 @@ public class NeuralNetwork {
 							for (int neuron = 0; neuron < output.rows(); neuron++)
 								outputGradient.values[neuron][sample] = sampleGradient.values[0][neuron];
 						}
-						gradient = outputGradient;
-						for (int layerIndex = layers.size() - 1; layerIndex >= 0; layerIndex--)
+						Matrix gradient = outputGradient;
+						for (int layerIndex = finalLayerIndex; layerIndex >= 0; layerIndex--)
 							gradient = layers.get(layerIndex).backward(gradient, learningRate, optimizer);
 					}
 				}
