@@ -52,6 +52,9 @@ public final class CudaBackend implements Backend {
 		Pointer deviceLeft = new Pointer();
 		Pointer deviceRight = new Pointer();
 		Pointer deviceResult = new Pointer();
+		boolean leftAllocated = false;
+		boolean rightAllocated = false;
+		boolean resultAllocated = false;
 
 		long leftBytes = (long) hostLeft.length * Sizeof.FLOAT;
 		long rightBytes = (long) hostRight.length * Sizeof.FLOAT;
@@ -59,8 +62,11 @@ public final class CudaBackend implements Backend {
 
 		try {
 			JCuda.cudaMalloc(deviceLeft, leftBytes);
+			leftAllocated = true;
 			JCuda.cudaMalloc(deviceRight, rightBytes);
+			rightAllocated = true;
 			JCuda.cudaMalloc(deviceResult, resultBytes);
+			resultAllocated = true;
 
 			JCuda.cudaMemcpy(deviceLeft, Pointer.to(hostLeft), leftBytes, cudaMemcpyKind.cudaMemcpyHostToDevice);
 			JCuda.cudaMemcpy(deviceRight, Pointer.to(hostRight), rightBytes, cudaMemcpyKind.cudaMemcpyHostToDevice);
@@ -88,11 +94,11 @@ public final class CudaBackend implements Backend {
 			JCuda.cudaMemcpy(Pointer.to(hostResult), deviceResult, resultBytes, cudaMemcpyKind.cudaMemcpyDeviceToHost);
 			return reshape(hostResult, rows, columns);
 		} finally {
-			if (deviceLeft.getNativePointer() != 0)
+			if (leftAllocated)
 				JCuda.cudaFree(deviceLeft);
-			if (deviceRight.getNativePointer() != 0)
+			if (rightAllocated)
 				JCuda.cudaFree(deviceRight);
-			if (deviceResult.getNativePointer() != 0)
+			if (resultAllocated)
 				JCuda.cudaFree(deviceResult);
 		}
 	}
