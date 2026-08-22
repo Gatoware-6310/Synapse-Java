@@ -1,6 +1,7 @@
 package xyz.gatoware.synapse.backend;
 
 import java.util.ArrayDeque;
+import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.Map;
 
@@ -14,22 +15,30 @@ import jcuda.runtime.cudaMemcpyKind;
 
 /** Experimental CUDA backend backed by JCuda and cuBLAS. */
 public final class CudaBackend implements Backend {
-	private static final int MAX_CACHED_MATRICES = 64;
+	/* Keep the hot cache deliberately small. Old entries are still safe because
+	 * their host values remain authoritative and can simply be uploaded again. */
+	private static final int MAX_CACHED_MATRICES = 16;
+	private static final int MAX_POOL_BUFFERS = 32;
+	private static final int MAX_POOL_PER_SIZE = 8;
 
 	private final cublasHandle handle = new cublasHandle();
 	private final Map<float[][], DeviceBuffer> cache = new IdentityHashMap<>();
 	private final ArrayDeque<float[][]> cacheOrder = new ArrayDeque<>();
+	private final Map<Integer, ArrayDeque<Pointer>> bufferPool = new HashMap<>();
+	private final float[] alphaValue = {1.0f};
+	private final float[] betaValue = {0.0f};
+	private final Pointer alpha = Pointer.to(alphaValue);
+	private final Pointer beta = Pointer.to(betaValue);
+	private int pooledBuffers;
 	private boolean closed;
 
 	private static final class DeviceBuffer {
 		private final Pointer pointer;
 		private final int elements;
-		private long fingerprint;
 
-		private DeviceBuffer(Pointer pointer, int elements, long fingerprint) {
+		private DeviceBuffer(Pointer pointer, int elements) {
 			this.pointer = pointer;
 			this.elements = elements;
-			this.fingerprint = fingerprint;
 		}
 	}
 
@@ -92,19 +101,11 @@ public final class CudaBackend implements Backend {
 
 		DeviceBuffer deviceLeft = getOrUpload(left, rows, shared);
 		DeviceBuffer deviceRight = getOrUpload(right, shared, columns);
-
 		int resultElements = rows * columns;
-		long resultBytes = (long) resultElements * Sizeof.FLOAT;
-		Pointer deviceResult = new Pointer();
-		boolean resultOwned = false;
+		DeviceBuffer deviceResult = acquire(resultElements);
+		boolean resultOwned = true;
 
 		try {
-			JCuda.cudaMalloc(deviceResult, resultBytes);
-			resultOwned = true;
-
-			Pointer alpha = Pointer.to(new float[] {1.0f});
-			Pointer beta = Pointer.to(new float[] {0.0f});
-
 			/* cuBLAS is column-major. Swapping the row-major operands computes
 			 * C^T = B^T A^T without a separate transpose. */
 			JCublas2.cublasSgemm(handle,
@@ -119,63 +120,82 @@ public final class CudaBackend implements Backend {
 				deviceLeft.pointer,
 				shared,
 				beta,
-				deviceResult,
+				deviceResult.pointer,
 				columns);
 
 			float[] hostResult = new float[resultElements];
-			JCuda.cudaMemcpy(Pointer.to(hostResult), deviceResult, resultBytes, cudaMemcpyKind.cudaMemcpyDeviceToHost);
+			long resultBytes = (long) resultElements * Sizeof.FLOAT;
+			JCuda.cudaMemcpy(Pointer.to(hostResult), deviceResult.pointer, resultBytes,
+				cudaMemcpyKind.cudaMemcpyDeviceToHost);
 			float[][] result = reshape(hostResult, rows, columns);
 
-			cacheResult(result, deviceResult, resultElements, fingerprint(result, rows, columns));
+			cacheResult(result, deviceResult);
 			resultOwned = false;
 			return result;
 		} finally {
 			if (resultOwned)
-				JCuda.cudaFree(deviceResult);
+				release(deviceResult);
 		}
 	}
 
 	private DeviceBuffer getOrUpload(float[][] matrix, int rows, int columns) {
 		int elements = rows * columns;
-		long fingerprint = fingerprint(matrix, rows, columns);
 		DeviceBuffer cached = cache.get(matrix);
-
 		if (cached != null && cached.elements == elements) {
 			touch(matrix);
-			if (cached.fingerprint != fingerprint) {
-				float[] flattened = flatten(matrix, rows, columns);
-				long bytes = (long) elements * Sizeof.FLOAT;
-				JCuda.cudaMemcpy(cached.pointer, Pointer.to(flattened), bytes, cudaMemcpyKind.cudaMemcpyHostToDevice);
-				cached.fingerprint = fingerprint;
-			}
 			return cached;
 		}
-
 		if (cached != null)
 			removeCached(matrix, cached);
 
-		float[] flattened = flatten(matrix, rows, columns);
-		Pointer pointer = new Pointer();
-		long bytes = (long) elements * Sizeof.FLOAT;
-		JCuda.cudaMalloc(pointer, bytes);
-		boolean allocated = true;
+		DeviceBuffer buffer = acquire(elements);
+		boolean owned = true;
 		try {
-			JCuda.cudaMemcpy(pointer, Pointer.to(flattened), bytes, cudaMemcpyKind.cudaMemcpyHostToDevice);
-			DeviceBuffer buffer = new DeviceBuffer(pointer, elements, fingerprint);
+			float[] flattened = flatten(matrix, rows, columns);
+			long bytes = (long) elements * Sizeof.FLOAT;
+			JCuda.cudaMemcpy(buffer.pointer, Pointer.to(flattened), bytes,
+				cudaMemcpyKind.cudaMemcpyHostToDevice);
 			putCached(matrix, buffer);
-			allocated = false;
+			owned = false;
 			return buffer;
 		} finally {
-			if (allocated)
-				JCuda.cudaFree(pointer);
+			if (owned)
+				release(buffer);
 		}
 	}
 
-	private void cacheResult(float[][] matrix, Pointer pointer, int elements, long fingerprint) {
+	private DeviceBuffer acquire(int elements) {
+		ArrayDeque<Pointer> available = bufferPool.get(elements);
+		if (available != null) {
+			Pointer pointer = available.pollFirst();
+			if (pointer != null) {
+				pooledBuffers--;
+				if (available.isEmpty())
+					bufferPool.remove(elements);
+				return new DeviceBuffer(pointer, elements);
+			}
+		}
+
+		Pointer pointer = new Pointer();
+		JCuda.cudaMalloc(pointer, (long) elements * Sizeof.FLOAT);
+		return new DeviceBuffer(pointer, elements);
+	}
+
+	private void release(DeviceBuffer buffer) {
+		ArrayDeque<Pointer> available = bufferPool.computeIfAbsent(buffer.elements, ignored -> new ArrayDeque<>());
+		if (pooledBuffers < MAX_POOL_BUFFERS && available.size() < MAX_POOL_PER_SIZE) {
+			available.addLast(buffer.pointer);
+			pooledBuffers++;
+			return;
+		}
+		JCuda.cudaFree(buffer.pointer);
+	}
+
+	private void cacheResult(float[][] matrix, DeviceBuffer buffer) {
 		DeviceBuffer previous = cache.get(matrix);
 		if (previous != null)
 			removeCached(matrix, previous);
-		putCached(matrix, new DeviceBuffer(pointer, elements, fingerprint));
+		putCached(matrix, buffer);
 	}
 
 	private void putCached(float[][] matrix, DeviceBuffer buffer) {
@@ -196,13 +216,22 @@ public final class CudaBackend implements Backend {
 			return;
 		DeviceBuffer buffer = cache.remove(oldest);
 		if (buffer != null)
-			JCuda.cudaFree(buffer.pointer);
+			release(buffer);
 	}
 
 	private void removeCached(float[][] matrix, DeviceBuffer buffer) {
 		cache.remove(matrix);
 		cacheOrder.remove(matrix);
-		JCuda.cudaFree(buffer.pointer);
+		release(buffer);
+	}
+
+	@Override
+	public synchronized void invalidate(float[][] matrix) {
+		if (closed || matrix == null)
+			return;
+		DeviceBuffer buffer = cache.get(matrix);
+		if (buffer != null)
+			removeCached(matrix, buffer);
 	}
 
 	private static float[] flatten(float[][] matrix, int rows, int columns) {
@@ -219,25 +248,6 @@ public final class CudaBackend implements Backend {
 		return matrix;
 	}
 
-	/* Matrix.values is intentionally public in Synapse. Since callers may mutate
-	 * it directly, use a cheap content fingerprint to detect host-side changes
-	 * before reusing a cached device allocation. */
-	private static long fingerprint(float[][] matrix, int rows, int columns) {
-		long hash = 0xcbf29ce484222325L;
-		hash ^= rows;
-		hash *= 0x100000001b3L;
-		hash ^= columns;
-		hash *= 0x100000001b3L;
-		for (int row = 0; row < rows; row++) {
-			float[] values = matrix[row];
-			for (int column = 0; column < columns; column++) {
-				hash ^= Float.floatToRawIntBits(values[column]);
-				hash *= 0x100000001b3L;
-			}
-		}
-		return hash;
-	}
-
 	private static String rootMessage(Throwable error) {
 		Throwable root = error;
 		while (root.getCause() != null)
@@ -248,13 +258,21 @@ public final class CudaBackend implements Backend {
 
 	@Override
 	public synchronized void close() {
-		if (!closed) {
-			for (DeviceBuffer buffer : cache.values())
-				JCuda.cudaFree(buffer.pointer);
-			cache.clear();
-			cacheOrder.clear();
-			JCublas2.cublasDestroy(handle);
-			closed = true;
-		}
+		if (closed)
+			return;
+
+		for (DeviceBuffer buffer : cache.values())
+			JCuda.cudaFree(buffer.pointer);
+		cache.clear();
+		cacheOrder.clear();
+
+		for (ArrayDeque<Pointer> pointers : bufferPool.values())
+			for (Pointer pointer : pointers)
+				JCuda.cudaFree(pointer);
+		bufferPool.clear();
+		pooledBuffers = 0;
+
+		JCublas2.cublasDestroy(handle);
+		closed = true;
 	}
 }
