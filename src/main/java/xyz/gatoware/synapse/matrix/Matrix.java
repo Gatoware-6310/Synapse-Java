@@ -1,5 +1,6 @@
 package xyz.gatoware.synapse.matrix;
 
+import xyz.gatoware.synapse.Synapse;
 import xyz.gatoware.synapse.activation.ActivationFunction;
 
 /** A wrapper for the type float[][] with extra functionality. */
@@ -53,6 +54,9 @@ public class Matrix {
 				temp[j][i] = m[i][j];
 
 		this.values = temp;
+		int previousRows = this.rows;
+		this.rows = this.columns;
+		this.columns = previousRows;
 		return this;
 	}
 
@@ -99,7 +103,7 @@ public class Matrix {
 		return this;
 	}
 
-	/** Multiplies this matrix by another matrix and returns it.
+	/** Multiplies this matrix by another matrix using the currently selected Synapse device and returns it.
 	 * @param m2 the matrix to multiply by
 	 * @return this matrix after multiplication
 	 */
@@ -108,33 +112,8 @@ public class Matrix {
 			throw new IllegalArgumentException("Matrix dimensions are incompatible!");
 		}
 
-		int resultColumns = m2.columns;
-		float[][] product = new float[this.rows][resultColumns];
-		if (resultColumns == 1) {
-			for (int i = 0; i < this.rows; i++) {
-				float sum = 0.0f;
-				float[] leftRow = this.values[i];
-				for (int k = 0; k < this.columns; k++)
-					sum += leftRow[k] * m2.values[k][0];
-				product[i][0] = sum;
-			}
-			this.values = product;
-			this.columns = 1;
-			return this;
-		}
-
-		for (int i = 0; i < this.rows; i++) {
-			float[] leftRow = this.values[i];
-			float[] productRow = product[i];
-			for (int k = 0; k < this.columns; k++) {
-				float leftValue = leftRow[k];
-				float[] rightRow = m2.values[k];
-				for (int j = 0; j < resultColumns; j++)
-					productRow[j] += leftValue * rightRow[j];
-			}
-		}
-
-		this.values = product;
+		int resultColumns = m2.columns();
+		this.values = Synapse.backend().multiply(this.values, m2.values, this.rows, this.columns, resultColumns);
 		this.columns = resultColumns;
 		return this;
 	}
