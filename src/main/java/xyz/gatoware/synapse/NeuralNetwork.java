@@ -21,6 +21,7 @@ import xyz.gatoware.synapse.activation.Sigmoid;
 import xyz.gatoware.synapse.activation.Softmax;
 import xyz.gatoware.synapse.activation.Swish;
 import xyz.gatoware.synapse.activation.Tanh;
+import xyz.gatoware.synapse.backend.CudaBackend;
 import xyz.gatoware.synapse.dataset.Dataset;
 import xyz.gatoware.synapse.layer.DenseLayer;
 import xyz.gatoware.synapse.layer.Layer;
@@ -36,22 +37,20 @@ public class NeuralNetwork {
 	private static final int FILE_VERSION = 1;
 	private static final int MAX_LAYERS = 1_000_000;
 	private static final int MAX_MATRIX_DIMENSION = 1_000_000;
+	private static final int CUDA_BATCH_SIZE = 32;
 
 	private List<Layer> layers = new ArrayList<>();
 	private float lastLoss = Float.NaN;
 
-	/** Creates an empty neural network. */
 	public NeuralNetwork() {
 		// here for compatibility
 	}
 
-	/** Creates a neural network from a list of layers. */
 	public NeuralNetwork(Layer[] layerList) {
 		for (Layer l : layerList)
 			addLayer(l);
 	}
 
-	/** An easier way to instantiate a neural network. */
 	public NeuralNetwork(int inputs, int layerSize, int layers, int outputs) {
 		if (inputs <= 0)
 			throw new IllegalArgumentException("inputs must be greater than 0");
@@ -73,15 +72,11 @@ public class NeuralNetwork {
 		addLayer(new DenseLayer(layerSize, outputs, new Softmax()));
 	}
 
-	/** Adds a layer to the neural network. */
 	public void addLayer(Layer layer) {
 		layers.add(layer);
 	}
 
-	/** Runs the input through every layer and returns the output. CUDA inference
-	 * keeps eligible hidden ReLU dense layers resident in VRAM and materializes
-	 * only when a non-resident/final layer needs host values.
-	 */
+	/** Runs the input through every layer and returns the output. */
 	public Matrix forward(Matrix input) {
 		Matrix output = input;
 		for (int i = 0; i < layers.size(); i++) {
@@ -95,7 +90,6 @@ public class NeuralNetwork {
 		return output;
 	}
 
-	/** Always materializes every layer and records training state for backward. */
 	private Matrix forwardTraining(Matrix input) {
 		Matrix output = input;
 		for (Layer layer : layers)
@@ -119,6 +113,125 @@ public class NeuralNetwork {
 
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
 			final Optimizer optimizer, final boolean logging) {
+		validateTrainingArguments(dataset, lossFunction, epochs, learningRate, optimizer);
+		if (canUseCudaTraining()) {
+			fitCuda(dataset, lossFunction, epochs, learningRate, optimizer, logging);
+			return;
+		}
+		fitCpu(dataset, lossFunction, epochs, learningRate, optimizer, logging);
+	}
+
+	private void fitCpu(Dataset dataset, LossFunction lossFunction, int epochs, float learningRate,
+			Optimizer optimizer, boolean logging) {
+		int[] order = makeOrder(dataset.size());
+		Random random = new Random();
+		for (int epoch = 0; epoch < epochs; epoch++) {
+			shuffle(order, random);
+			float totalLoss = 0.0f;
+			for (int index : order) {
+				Matrix output = forwardTraining(dataset.getInput(index));
+				Matrix predicted = rowVector(output);
+				Matrix actual = rowVector(dataset.getTarget(index));
+				totalLoss += lossFunction.calculate(predicted, actual);
+				Matrix gradient = columnVector(lossFunction.gradient(predicted, actual));
+				for (int layer = layers.size() - 1; layer >= 0; layer--)
+					gradient = layers.get(layer).backward(gradient, learningRate, optimizer);
+			}
+			lastLoss = totalLoss / dataset.size();
+			if (logging)
+				System.out.printf("Epoch %d loss: %.6f accuracy: %.2f%%%n", epoch + 1, lastLoss,
+					accuracy(dataset) * 100.0f);
+		}
+	}
+
+	/** CUDA training uses mini-batches and keeps all hidden dense/ReLU activations,
+	 * backprop GEMMs, gradients and optimizer state on the GPU. The final
+	 * activation/loss boundary is materialized so Softmax and arbitrary LossFunction
+	 * implementations keep their existing Java API.
+	 */
+	private void fitCuda(Dataset dataset, LossFunction lossFunction, int epochs, float learningRate,
+			Optimizer optimizer, boolean logging) {
+		int[] order = makeOrder(dataset.size());
+		Random random = new Random();
+		int featureCount = dataset.getInputs().columns();
+
+		try {
+			for (int epoch = 0; epoch < epochs; epoch++) {
+				shuffle(order, random);
+				float totalLoss = 0.0f;
+
+				for (int start = 0; start < order.length; start += CUDA_BATCH_SIZE) {
+					int batchSize = Math.min(CUDA_BATCH_SIZE, order.length - start);
+					Matrix batchInput = new Matrix(featureCount, batchSize);
+					for (int sample = 0; sample < batchSize; sample++) {
+						int index = order[start + sample];
+						for (int feature = 0; feature < featureCount; feature++)
+							batchInput.values[feature][sample] = dataset.getInputs().values[index][feature];
+					}
+
+					Matrix output = batchInput;
+					for (int layerIndex = 0; layerIndex < layers.size(); layerIndex++) {
+						DenseLayer dense = (DenseLayer) layers.get(layerIndex);
+						if (layerIndex < layers.size() - 1)
+							output = dense.forwardCudaResident(output);
+						else
+							output = dense.forward(output);
+					}
+
+					Matrix outputGradient = new Matrix(output.rows(), batchSize);
+					for (int sample = 0; sample < batchSize; sample++) {
+						int index = order[start + sample];
+						Matrix predicted = rowFromColumn(output, sample);
+						Matrix actual = rowVector(dataset.getTarget(index));
+						totalLoss += lossFunction.calculate(predicted, actual);
+						Matrix sampleGradient = lossFunction.gradient(predicted, actual);
+						if (sampleGradient.rows() != 1 || sampleGradient.columns() != output.rows())
+							throw new IllegalStateException("Loss gradient must match the network output width");
+						for (int neuron = 0; neuron < output.rows(); neuron++)
+							outputGradient.values[neuron][sample] = sampleGradient.values[0][neuron];
+					}
+
+					Matrix gradient = outputGradient;
+					for (int layerIndex = layers.size() - 1; layerIndex >= 0; layerIndex--)
+						gradient = layers.get(layerIndex).backward(gradient, learningRate, optimizer);
+				}
+
+				lastLoss = totalLoss / dataset.size();
+				if (logging)
+					System.out.printf("Epoch %d loss: %.6f accuracy: %.2f%%%n", epoch + 1, lastLoss,
+						accuracy(dataset) * 100.0f);
+			}
+		} finally {
+			materializeCudaParameters();
+		}
+	}
+
+	private boolean canUseCudaTraining() {
+		if (!(Synapse.backend() instanceof CudaBackend) || layers.isEmpty())
+			return false;
+		for (int i = 0; i < layers.size(); i++) {
+			if (!(layers.get(i) instanceof DenseLayer dense))
+				return false;
+			if (i < layers.size() - 1 && !dense.canForwardCudaResident())
+				return false;
+		}
+		return true;
+	}
+
+	private void materializeCudaParameters() {
+		for (Layer layer : layers)
+			if (layer instanceof DenseLayer dense)
+				dense.materializeParameters();
+	}
+
+	private static int[] makeOrder(int size) {
+		int[] order = new int[size];
+		for (int i = 0; i < size; i++) order[i] = i;
+		return order;
+	}
+
+	private void validateTrainingArguments(Dataset dataset, LossFunction lossFunction, int epochs,
+			float learningRate, Optimizer optimizer) {
 		if (dataset == null)
 			throw new IllegalArgumentException("Dataset cannot be null");
 		if (lossFunction == null)
@@ -133,33 +246,6 @@ public class NeuralNetwork {
 			throw new IllegalArgumentException("Epochs must be positive");
 		if (!Float.isFinite(learningRate) || learningRate <= 0.0f)
 			throw new IllegalArgumentException("Learning rate must be positive and finite");
-
-		int[] order = new int[dataset.size()];
-		for (int i = 0; i < order.length; i++)
-			order[i] = i;
-		Random random = new Random();
-
-		for (int epoch = 0; epoch < epochs; epoch++) {
-			shuffle(order, random);
-			float totalLoss = 0.0f;
-
-			for (int index : order) {
-				Matrix output = forwardTraining(dataset.getInput(index));
-				Matrix predicted = rowVector(output);
-				Matrix actual = rowVector(dataset.getTarget(index));
-				totalLoss += lossFunction.calculate(predicted, actual);
-
-				Matrix gradient = columnVector(lossFunction.gradient(predicted, actual));
-				for (int layer = layers.size() - 1; layer >= 0; layer--)
-					gradient = layers.get(layer).backward(gradient, learningRate, optimizer);
-			}
-
-			lastLoss = totalLoss / dataset.size();
-			if (logging) {
-				System.out.printf("Epoch %d loss: %.6f accuracy: %.2f%%%n", epoch + 1, lastLoss,
-					accuracy(dataset) * 100.0f);
-			}
-		}
 	}
 
 	public void fit(final Dataset dataset, final int epochs, final float learningRate) {
@@ -179,12 +265,10 @@ public class NeuralNetwork {
 		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, optimizer, logging);
 	}
 
-	/** Returns the most recent average loss after training. */
 	public float getLastLoss() {
 		return lastLoss;
 	}
 
-	/** Returns the index of the largest value in the network output. */
 	public int predict(Matrix input) {
 		Matrix output = forward(input);
 		if (output.rows() == 0 || output.columns() == 0 || (output.rows() != 1 && output.columns() != 1))
@@ -203,7 +287,6 @@ public class NeuralNetwork {
 		return prediction;
 	}
 
-	/** Returns the fraction of dataset samples classified correctly. */
 	public float accuracy(Dataset dataset) {
 		if (dataset == null)
 			throw new IllegalArgumentException("Dataset cannot be null");
@@ -230,6 +313,13 @@ public class NeuralNetwork {
 		return result;
 	}
 
+	private static Matrix rowFromColumn(Matrix matrix, int column) {
+		Matrix result = new Matrix(1, matrix.rows());
+		for (int row = 0; row < matrix.rows(); row++)
+			result.values[0][row] = matrix.values[row][column];
+		return result;
+	}
+
 	private static Matrix columnVector(Matrix vector) {
 		if (vector.columns() == 1)
 			return vector.copy();
@@ -250,13 +340,12 @@ public class NeuralNetwork {
 		}
 	}
 
-	/** Saves the model to a file. */
 	public void save(String filename) throws IOException {
 		save(Path.of(filename));
 	}
 
-	/** Saves the model to a path. */
 	public void save(Path path) throws IOException {
+		materializeCudaParameters();
 		try (DataOutputStream output = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(path)))) {
 			output.writeInt(FILE_MAGIC);
 			output.writeInt(FILE_VERSION);
@@ -272,12 +361,10 @@ public class NeuralNetwork {
 		}
 	}
 
-	/** Loads a model from a file. */
 	public static NeuralNetwork load(String filename) throws IOException {
 		return load(Path.of(filename));
 	}
 
-	/** Loads a model from a path. */
 	public static NeuralNetwork load(Path path) throws IOException {
 		try (DataInputStream input = new DataInputStream(new BufferedInputStream(Files.newInputStream(path)))) {
 			if (input.readInt() != FILE_MAGIC)
@@ -351,26 +438,16 @@ public class NeuralNetwork {
 
 	private static ActivationFunction readActivation(DataInputStream input) throws IOException {
 		switch (input.readByte()) {
-			case 1:
-				return new ReLU();
-			case 2:
-				return new Sigmoid();
-			case 3:
-				return new Tanh();
-			case 4:
-				return new SiLU();
-			case 5:
-				return new Swish();
-			case 6:
-				return new GELU();
-			case 7:
-				return new Softmax();
-			case 8:
-				return new ELU(input.readFloat());
-			case 9:
-				return new LeakyReLU(input.readFloat());
-			default:
-				throw new IOException("Unsupported activation function");
+			case 1: return new ReLU();
+			case 2: return new Sigmoid();
+			case 3: return new Tanh();
+			case 4: return new SiLU();
+			case 5: return new Swish();
+			case 6: return new GELU();
+			case 7: return new Softmax();
+			case 8: return new ELU(input.readFloat());
+			case 9: return new LeakyReLU(input.readFloat());
+			default: throw new IOException("Unsupported activation function");
 		}
 	}
 }
