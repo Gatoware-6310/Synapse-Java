@@ -57,30 +57,32 @@ public final class CudaBenchmark {
 		printResult("Raw " + size + "x" + size + " multiply", cpuMs, cudaMs);
 	}
 
+	/**
+	 * Measures repeated multiplication with exactly the same host arrays.
+	 * This intentionally calls the backend directly so neither operand is copied
+	 * or replaced between iterations. On CUDA this is the true cache-hit case:
+	 * both input allocations may remain resident in VRAM. The result is still
+	 * copied back to the host because the current Backend contract returns float[][].
+	 */
 	private static void benchmarkCachedMultiply(int size) {
-		Matrix cpuLeft = new Matrix(randomValues(size, size));
-		Matrix cpuRight = new Matrix(randomValues(size, size));
-		Matrix cudaLeft = new Matrix(copy(cpuLeft.values));
-		Matrix cudaRight = new Matrix(copy(cpuRight.values));
+		float[][] left = randomValues(size, size);
+		float[][] right = randomValues(size, size);
 
-		double cpuMs = timeMs(Devices.CPU, () -> {
-			Matrix working = cpuLeft.copy();
-			working.multiply(cpuRight);
-		});
+		double cpuMs = timeBackendMultiply(Devices.CPU, left, right, size);
+		double cudaMs = timeBackendMultiply(Devices.CUDA, left, right, size);
 
-		Synapse.useDevice(Devices.CUDA);
-		for (int i = 0; i < WARMUP; i++) {
-			Matrix working = cudaLeft.copy();
-			working.multiply(cudaRight);
-		}
+		printResult("Fully cached inputs " + size + "x" + size + " multiply", cpuMs, cudaMs);
+	}
+
+	private static double timeBackendMultiply(Devices device, float[][] left, float[][] right, int size) {
+		Synapse.useDevice(device);
+		for (int i = 0; i < WARMUP; i++)
+			Synapse.backend().multiply(left, right, size, size, size);
+
 		long start = System.nanoTime();
-		for (int i = 0; i < ITERATIONS; i++) {
-			Matrix working = cudaLeft.copy();
-			working.multiply(cudaRight);
-		}
-		double cudaMs = (System.nanoTime() - start) / 1_000_000.0 / ITERATIONS;
-
-		printResult("Cached/reused " + size + "x" + size + " multiply", cpuMs, cudaMs);
+		for (int i = 0; i < ITERATIONS; i++)
+			Synapse.backend().multiply(left, right, size, size, size);
+		return (System.nanoTime() - start) / 1_000_000.0 / ITERATIONS;
 	}
 
 	private static void benchmarkDenseForward(int inputSize, int hiddenSize, int passes) {
