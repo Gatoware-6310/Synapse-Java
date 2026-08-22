@@ -42,7 +42,8 @@ public final class CudaBenchmark {
 			benchmarkDenseForward(784, 1024, batch);
 		for (int batch : new int[] {1, 32, 128})
 			benchmarkNetworkForward(784, 1024, 3, 10, batch);
-		benchmarkTraining(256, 784, 256, 2, 10);
+		benchmarkTrainingSweep(256, 784, 256, 2, 10);
+		Synapse.setCudaBatchSize(32);
 		Synapse.useDevice(Devices.CPU);
 	}
 
@@ -114,28 +115,32 @@ public final class CudaBenchmark {
 			+ " batch " + batchSize, cpuMs, cudaMs);
 	}
 
-	private static void benchmarkTraining(int samples, int inputSize, int hiddenSize, int hiddenLayers, int outputs) {
+	private static void benchmarkTrainingSweep(int samples, int inputSize, int hiddenSize, int hiddenLayers, int outputs) {
 		Matrix inputs = new Matrix(randomValues(samples, inputSize));
 		Matrix targets = new Matrix(samples, 1);
 		for (int i = 0; i < samples; i++)
 			targets.values[i][0] = RANDOM.nextInt(outputs);
 		Dataset dataset = new Dataset(inputs, targets);
 
-		NeuralNetwork cpu = new NeuralNetwork(inputSize, hiddenSize, hiddenLayers, outputs);
-		NeuralNetwork cuda = new NeuralNetwork(inputSize, hiddenSize, hiddenLayers, outputs);
-
 		Synapse.useDevice(Devices.CPU);
+		NeuralNetwork cpu = new NeuralNetwork(inputSize, hiddenSize, hiddenLayers, outputs);
 		long start = System.nanoTime();
 		cpu.fit(dataset, 1, 0.001f);
 		double cpuMs = (System.nanoTime() - start) / 1_000_000.0;
 
-		Synapse.useDevice(Devices.CUDA);
-		start = System.nanoTime();
-		cuda.fit(dataset, 1, 0.001f);
-		double cudaMs = (System.nanoTime() - start) / 1_000_000.0;
+		System.out.printf("%nTraining epoch %d samples, %d -> %d x%d -> %d%n",
+			samples, inputSize, hiddenSize, hiddenLayers, outputs);
+		System.out.printf("  CPU baseline: %.3f ms%n", cpuMs);
 
-		printResult("Training epoch " + samples + " samples, " + inputSize + " -> " + hiddenSize
-			+ " x" + hiddenLayers + " -> " + outputs, cpuMs, cudaMs);
+		for (int batch : new int[] {16, 32, 64, 128, 256}) {
+			Synapse.setCudaBatchSize(batch);
+			Synapse.useDevice(Devices.CUDA);
+			NeuralNetwork cuda = new NeuralNetwork(inputSize, hiddenSize, hiddenLayers, outputs);
+			start = System.nanoTime();
+			cuda.fit(dataset, 1, 0.001f);
+			double cudaMs = (System.nanoTime() - start) / 1_000_000.0;
+			System.out.printf("  CUDA batch %-3d: %8.3f ms  (%6.2fx)%n", batch, cudaMs, cpuMs / cudaMs);
+		}
 	}
 
 	private static double timeMs(Devices device, Runnable task) {
