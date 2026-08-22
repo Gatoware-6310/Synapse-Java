@@ -2,6 +2,7 @@ package xyz.gatoware.synapse.layer;
 
 import java.util.Arrays;
 
+import xyz.gatoware.synapse.Synapse;
 import xyz.gatoware.synapse.activation.ActivationFunction;
 import xyz.gatoware.synapse.matrix.Matrix;
 import xyz.gatoware.synapse.optimizer.Optimizer;
@@ -74,11 +75,9 @@ public class DenseLayer implements Layer {
 		for (int i = 0; i < inputSize; i++)
 			lastInput.values[i][0] = input.values[i][0];
 
+		float[][] product = Synapse.backend().multiply(weights.values, input.values, outputSize, inputSize, 1);
 		for (int neuron = 0; neuron < outputSize; neuron++) {
-			float[] neuronWeights = weights.values[neuron];
-			float sum = biases.values[neuron][0];
-			for (int i = 0; i < inputSize; i++)
-				sum += neuronWeights[i] * input.values[i][0];
+			float sum = product[neuron][0] + biases.values[neuron][0];
 			lastWeightedInput.values[neuron][0] = sum;
 			weightedInputValues[neuron] = sum;
 		}
@@ -174,7 +173,7 @@ public class DenseLayer implements Layer {
 	}
 
 	/** Returns the layer activation function.
-	 * @return the layer activation function
+	 * @return the activation function
 	 */
 	public ActivationFunction getActivationFunction() {
 		return activationFunction;
