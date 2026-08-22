@@ -33,45 +33,44 @@ if (Synapse.isDeviceAvailable(Devices.CUDA)) {
 }
 ```
 
-`isDeviceAvailable(Devices.CUDA)` verifies the CUDA device/runtime and that cuBLAS can actually be initialized. A machine with a working NVIDIA driver but a missing or incompatible cuBLAS installation therefore correctly reports CUDA as unavailable.
-
 ## What is accelerated
 
-This first implementation routes `Matrix.multiply(Matrix)` and the matrix/vector multiplication in `DenseLayer.forward` through the selected backend. CUDA multiplication uses cuBLAS SGEMM through JCuda.
+This implementation routes `Matrix.multiply(Matrix)` and the matrix/vector multiplication in `DenseLayer.forward` through the selected backend. CUDA multiplication uses cuBLAS SGEMM through JCuda.
 
 Backpropagation, optimizers, activations, and element-wise matrix operations are still CPU code in this branch.
 
-The CUDA backend currently allocates device memory and transfers data for each multiplication. It is intentionally a correctness/proof-of-concept implementation, not the final performance design. A later version should cache matrix data in VRAM and add mini-batch training before performance comparisons are considered meaningful.
+## GPU memory caching
+
+The CUDA backend now keeps a bounded cache of device allocations for matrices used by multiplication. Reusing the same matrix can therefore reuse its VRAM allocation instead of allocating and uploading it again for every multiply.
+
+Because `Matrix.values` remains public API, callers can still mutate the underlying `float[][]` directly. The CUDA backend validates cached host contents before reuse and re-uploads a matrix when its values have changed, preserving compatibility with existing Synapse code.
+
+CUDA multiplication results are also retained in the cache, so a result that immediately feeds another multiplication can reuse the already-populated device allocation.
+
+The cache is currently capped at 64 matrices and evicts the least-recently-used allocation when full. All cached allocations are released when switching away from CUDA.
+
+A host copy of each multiplication result is still produced because the current public API exposes `Matrix.values` directly. This means the branch no longer pays every upload/allocation repeatedly, but still pays a device-to-host copy after each multiply. Removing that final synchronization cost would require a deeper `Matrix` storage redesign or changing the semantics of direct `values` access.
+
+Mini-batch training is still strongly recommended before treating CUDA benchmarks as representative; the current training loop processes one sample at a time.
 
 ## Requirements
 
 - Java 21
 - NVIDIA GPU with CUDA support
 - NVIDIA driver
-- CUDA 12.x runtime/cuBLAS compatible with JCuda 12.6
+- CUDA/cuBLAS compatible with the JCuda runtime in this branch
 
-JCuda's Java and native binding jars are resolved by Gradle for the current operating system and architecture. The NVIDIA CUDA/cuBLAS libraries themselves must still be present on the system.
-
-The current Arch Linux `cuda` package is CUDA 13.x and provides `libcublas.so.13`, while this experimental backend uses JCuda 12.6 and therefore needs a CUDA 12.x cuBLAS installation. CUDA 13 also removed library support for Maxwell, Pascal, and Volta GPUs, so CUDA 12.x is required for those architectures. A compatible CUDA 12.x installation such as CUDA 12.9 is therefore the intended test environment for this branch.
-
-Useful Linux diagnostics:
-
-```bash
-nvidia-smi
-nvcc --version
-ldconfig -p | grep -E 'libcublas\.so|libcublasLt\.so'
-```
-
-For this branch, the important result is that a CUDA 12 installation exposes `libcublas.so.12` and `libcublasLt.so.12` to the JVM.
+JCuda's Java and native binding jars are resolved by Gradle for the current operating system and architecture.
 
 ## Build and test
 
 ```bash
 git switch cuda
+git pull
 ./gradlew test
 ```
 
-The CUDA parity test automatically skips when the complete CUDA/cuBLAS backend is unavailable.
+CUDA-specific tests automatically skip when the complete CUDA/cuBLAS backend cannot initialize. When CUDA is available, the suite checks CPU/CUDA numerical parity, cached-result reuse, and correctness after direct `Matrix.values` mutation.
 
 To build the normal jars:
 
