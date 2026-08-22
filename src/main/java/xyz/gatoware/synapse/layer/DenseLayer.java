@@ -12,7 +12,6 @@ import xyz.gatoware.synapse.optimizer.SGD;
 
 /** A fully connected neural network layer. */
 public class DenseLayer implements Layer {
-
 	private Matrix weights;
 	private Matrix biases;
 	private ActivationFunction activationFunction;
@@ -27,6 +26,10 @@ public class DenseLayer implements Layer {
 	private float[] weightedGradient;
 	private float[] inputGradientValues;
 	private boolean lastForwardWasBatch;
+	private boolean lastCudaResident;
+	private Matrix lastBatchInput;
+	private Matrix lastBatchWeighted;
+	private Matrix lastBatchOutput;
 
 	public DenseLayer(int inputSize, int outputSize, ActivationFunction activationFunction) {
 		this.activationFunction = activationFunction;
@@ -54,25 +57,32 @@ public class DenseLayer implements Layer {
 		int inputSize = weights.columns();
 		int outputSize = weights.rows();
 		int batchSize = input.columns();
-		float[][] product = Synapse.backend().multiply(weights.values, input.values,
-			outputSize, inputSize, batchSize);
+		float[][] product = Synapse.backend().multiply(weights.values, input.values, outputSize, inputSize, batchSize);
+		lastCudaResident = false;
 
 		if (batchSize > 1) {
 			lastForwardWasBatch = true;
-			Matrix result = new Matrix(outputSize, batchSize);
+			lastBatchInput = input;
+			lastBatchWeighted = new Matrix(outputSize, batchSize);
+			lastBatchOutput = new Matrix(outputSize, batchSize);
 			float[] weighted = new float[outputSize];
 			float[] activated = new float[outputSize];
 			for (int sample = 0; sample < batchSize; sample++) {
-				for (int neuron = 0; neuron < outputSize; neuron++)
+				for (int neuron = 0; neuron < outputSize; neuron++) {
 					weighted[neuron] = product[neuron][sample] + biases.values[neuron][0];
+					lastBatchWeighted.values[neuron][sample] = weighted[neuron];
+				}
 				activationFunction.apply(weighted, activated);
 				for (int neuron = 0; neuron < outputSize; neuron++)
-					result.values[neuron][sample] = activated[neuron];
+					lastBatchOutput.values[neuron][sample] = activated[neuron];
 			}
-			return result;
+			return lastBatchOutput;
 		}
 
 		lastForwardWasBatch = false;
+		lastBatchInput = null;
+		lastBatchWeighted = null;
+		lastBatchOutput = null;
 		ensureTrainingBuffers(inputSize, outputSize);
 		lastInput.markDirty();
 		lastWeightedInput.markDirty();
@@ -90,16 +100,13 @@ public class DenseLayer implements Layer {
 		return lastOutput.copy();
 	}
 
-	/** Returns true when this layer can use the no-readback CUDA inference path. */
 	public boolean canForwardCudaResident() {
 		return activationFunction instanceof ReLU
 			&& Synapse.backend() instanceof CudaBackend cuda
 			&& cuda.supportsResidentRelu();
 	}
 
-	/** Runs this ReLU dense layer without materializing its result on the CPU.
-	 * Intended for internal network inference chains only.
-	 */
+	/** Runs this ReLU dense layer without materializing its result on the CPU. */
 	public Matrix forwardCudaResident(Matrix input) {
 		if (!(activationFunction instanceof ReLU))
 			throw new IllegalStateException("Resident CUDA forward currently supports ReLU layers only");
@@ -107,8 +114,13 @@ public class DenseLayer implements Layer {
 			return forward(input);
 		if (input.rows() != weights.columns() || input.columns() <= 0)
 			throw new IllegalArgumentException("Dense layer input must have " + weights.columns() + " rows");
+		Matrix result = cuda.denseReluResident(weights, biases, input);
 		lastForwardWasBatch = input.columns() > 1;
-		return cuda.denseReluResident(weights, biases, input);
+		lastCudaResident = true;
+		lastBatchInput = input;
+		lastBatchWeighted = null;
+		lastBatchOutput = result;
+		return result;
 	}
 
 	@Override
@@ -118,16 +130,55 @@ public class DenseLayer implements Layer {
 
 	@Override
 	public Matrix backward(Matrix outputGradient, float learningRate, Optimizer optimizer) {
-		if (lastForwardWasBatch)
-			throw new IllegalStateException("Backward after a batched forward is not supported yet");
-		if (lastInput == null)
-			throw new IllegalStateException("Dense layer must run forward before backward");
-		if (outputGradient.rows() != weights.rows() || outputGradient.columns() != 1)
-			throw new IllegalArgumentException("Dense layer output gradient must have dimensions " + weights.rows() + " x 1");
 		if (!Float.isFinite(learningRate) || learningRate <= 0.0f)
 			throw new IllegalArgumentException("Learning rate must be positive and finite");
 		if (optimizer == null)
 			throw new IllegalArgumentException("Optimizer cannot be null");
+
+		if (Synapse.backend() instanceof CudaBackend cuda) {
+			if (lastCudaResident) {
+				if (lastBatchInput == null || lastBatchOutput == null)
+					throw new IllegalStateException("Dense layer must run forward before backward");
+				if (outputGradient.rows() != weights.rows() || outputGradient.columns() != lastBatchInput.columns())
+					throw new IllegalArgumentException("Dense layer output gradient dimensions do not match the last forward pass");
+				return cuda.denseReluBackwardUpdate(weights, biases, lastBatchInput, lastBatchOutput,
+					outputGradient, optimizer, learningRate);
+			}
+
+			if (lastForwardWasBatch) {
+				if (lastBatchInput == null || lastBatchWeighted == null || lastBatchOutput == null)
+					throw new IllegalStateException("Dense layer must run forward before backward");
+				int outputSize = weights.rows();
+				int batch = lastBatchInput.columns();
+				if (outputGradient.rows() != outputSize || outputGradient.columns() != batch)
+					throw new IllegalArgumentException("Dense layer output gradient dimensions do not match the last forward pass");
+
+				Matrix weightedGradients = new Matrix(outputSize, batch);
+				float[] weighted = new float[outputSize];
+				float[] output = new float[outputSize];
+				float[] upstream = new float[outputSize];
+				float[] result = new float[outputSize];
+				for (int sample = 0; sample < batch; sample++) {
+					for (int neuron = 0; neuron < outputSize; neuron++) {
+						weighted[neuron] = lastBatchWeighted.values[neuron][sample];
+						output[neuron] = lastBatchOutput.values[neuron][sample];
+						upstream[neuron] = outputGradient.values[neuron][sample];
+					}
+					activationFunction.backward(weighted, output, upstream, result);
+					for (int neuron = 0; neuron < outputSize; neuron++)
+						weightedGradients.values[neuron][sample] = result[neuron];
+				}
+				return cuda.denseBackwardUpdate(weights, biases, lastBatchInput, weightedGradients,
+					optimizer, learningRate);
+			}
+		}
+
+		if (lastForwardWasBatch)
+			throw new IllegalStateException("Backward after a batched forward requires the CUDA backend");
+		if (lastInput == null)
+			throw new IllegalStateException("Dense layer must run forward before backward");
+		if (outputGradient.rows() != weights.rows() || outputGradient.columns() != 1)
+			throw new IllegalArgumentException("Dense layer output gradient must have dimensions " + weights.rows() + " x 1");
 
 		for (int i = 0; i < weights.rows(); i++) {
 			weightedInputValues[i] = lastWeightedInput.values[i][0];
@@ -148,12 +199,19 @@ public class DenseLayer implements Layer {
 		}
 		for (int input = 0; input < weights.columns(); input++)
 			inputGradient.values[input][0] = inputGradientValues[input];
-
 		optimizer.update(weights, weightGradients, learningRate);
 		optimizer.update(biases, biasGradients, learningRate);
 		weights.markDirty();
 		biases.markDirty();
 		return inputGradient;
+	}
+
+	/** Ensures GPU-updated parameters are visible through the public host arrays. */
+	public void materializeParameters() {
+		if (Synapse.backend() instanceof CudaBackend cuda) {
+			cuda.materialize(weights);
+			cuda.materialize(biases);
+		}
 	}
 
 	private void ensureTrainingBuffers(int inputSize, int outputSize) {
@@ -173,15 +231,7 @@ public class DenseLayer implements Layer {
 		}
 	}
 
-	public Matrix getWeights() {
-		return weights;
-	}
-
-	public Matrix getBiases() {
-		return biases;
-	}
-
-	public ActivationFunction getActivationFunction() {
-		return activationFunction;
-	}
+	public Matrix getWeights() { return weights; }
+	public Matrix getBiases() { return biases; }
+	public ActivationFunction getActivationFunction() { return activationFunction; }
 }
