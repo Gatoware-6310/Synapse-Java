@@ -34,43 +34,32 @@ public final class CudaBenchmark {
 
 		benchmarkRawMultiply(512);
 		benchmarkCachedMultiply(512);
-		benchmarkDenseForward(784, 1024, 10);
+		for (int batch : new int[] {1, 8, 32, 64, 128, 256})
+			benchmarkDenseForward(784, 1024, batch);
 		Synapse.useDevice(Devices.CPU);
 	}
 
 	private static void benchmarkRawMultiply(int size) {
 		float[][] aValues = randomValues(size, size);
 		float[][] bValues = randomValues(size, size);
-
 		double cpuMs = timeMs(Devices.CPU, () -> {
 			Matrix a = new Matrix(copy(aValues));
 			Matrix b = new Matrix(copy(bValues));
 			a.multiply(b);
 		});
-
 		double cudaMs = timeMs(Devices.CUDA, () -> {
 			Matrix a = new Matrix(copy(aValues));
 			Matrix b = new Matrix(copy(bValues));
 			a.multiply(b);
 		});
-
 		printResult("Raw " + size + "x" + size + " multiply", cpuMs, cudaMs);
 	}
 
-	/**
-	 * Measures repeated multiplication with exactly the same host arrays.
-	 * This intentionally calls the backend directly so neither operand is copied
-	 * or replaced between iterations. On CUDA this is the true cache-hit case:
-	 * both input allocations may remain resident in VRAM. The result is still
-	 * copied back to the host because the current Backend contract returns float[][].
-	 */
 	private static void benchmarkCachedMultiply(int size) {
 		float[][] left = randomValues(size, size);
 		float[][] right = randomValues(size, size);
-
 		double cpuMs = timeBackendMultiply(Devices.CPU, left, right, size);
 		double cudaMs = timeBackendMultiply(Devices.CUDA, left, right, size);
-
 		printResult("Fully cached inputs " + size + "x" + size + " multiply", cpuMs, cudaMs);
 	}
 
@@ -78,29 +67,20 @@ public final class CudaBenchmark {
 		Synapse.useDevice(device);
 		for (int i = 0; i < WARMUP; i++)
 			Synapse.backend().multiply(left, right, size, size, size);
-
 		long start = System.nanoTime();
 		for (int i = 0; i < ITERATIONS; i++)
 			Synapse.backend().multiply(left, right, size, size, size);
 		return (System.nanoTime() - start) / 1_000_000.0 / ITERATIONS;
 	}
 
-	private static void benchmarkDenseForward(int inputSize, int hiddenSize, int passes) {
+	private static void benchmarkDenseForward(int inputSize, int hiddenSize, int batchSize) {
 		DenseLayer cpuLayer = new DenseLayer(inputSize, hiddenSize, new ReLU());
 		DenseLayer cudaLayer = new DenseLayer(cpuLayer.getWeights().copy(), cpuLayer.getBiases().copy(), new ReLU());
-		Matrix input = new Matrix(randomValues(inputSize, 1));
+		Matrix input = new Matrix(randomValues(inputSize, batchSize));
 
-		double cpuMs = timeMs(Devices.CPU, () -> {
-			for (int i = 0; i < passes; i++)
-				cpuLayer.forward(input);
-		}) / passes;
-
-		double cudaMs = timeMs(Devices.CUDA, () -> {
-			for (int i = 0; i < passes; i++)
-				cudaLayer.forward(input);
-		}) / passes;
-
-		printResult("Dense forward " + inputSize + " -> " + hiddenSize, cpuMs, cudaMs);
+		double cpuMs = timeMs(Devices.CPU, () -> cpuLayer.forward(input));
+		double cudaMs = timeMs(Devices.CUDA, () -> cudaLayer.forward(input));
+		printResult("Dense forward " + inputSize + " -> " + hiddenSize + " batch " + batchSize, cpuMs, cudaMs);
 	}
 
 	private static double timeMs(Devices device, Runnable task) {
