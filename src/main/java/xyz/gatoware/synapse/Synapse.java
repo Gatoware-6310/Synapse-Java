@@ -8,6 +8,7 @@ import xyz.gatoware.synapse.backend.CudaBackend;
 public final class Synapse {
 	private static volatile Devices device = Devices.CPU;
 	private static volatile Backend backend = CpuBackend.INSTANCE;
+	private static volatile int cudaBatchSize = 32;
 
 	private Synapse() {
 	}
@@ -36,17 +37,12 @@ public final class Synapse {
 			previousBackend.close();
 	}
 
-	/** Returns the currently selected compute device.
-	 * @return the active device
-	 */
+	/** Returns the currently selected compute device. */
 	public static Devices getDevice() {
 		return device;
 	}
 
-	/** Checks whether a device is available on this system.
-	 * @param requestedDevice the device to check
-	 * @return whether the device is available
-	 */
+	/** Checks whether a device is available on this system. */
 	public static boolean isDeviceAvailable(Devices requestedDevice) {
 		if (requestedDevice == null)
 			return false;
@@ -56,11 +52,19 @@ public final class Synapse {
 		};
 	}
 
-	/** Returns the active internal compute backend.
-	 * This is public so Synapse subpackages can share the selected backend;
-	 * ordinary library users should prefer useDevice(Devices).
-	 * @return the active backend
-	 */
+	/** Sets the CUDA training mini-batch size. Default is 32. */
+	public static void setCudaBatchSize(int batchSize) {
+		if (batchSize <= 0)
+			throw new IllegalArgumentException("CUDA batch size must be positive");
+		cudaBatchSize = batchSize;
+	}
+
+	/** Returns the configured CUDA training mini-batch size. */
+	public static int getCudaBatchSize() {
+		return cudaBatchSize;
+	}
+
+	/** Returns the active internal compute backend. */
 	public static Backend backend() {
 		return backend;
 	}
