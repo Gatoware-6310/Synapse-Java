@@ -1,4 +1,5 @@
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.AfterEach;
@@ -11,9 +12,11 @@ import xyz.gatoware.synapse.Synapse;
 import xyz.gatoware.synapse.activation.ReLU;
 import xyz.gatoware.synapse.activation.Softmax;
 import xyz.gatoware.synapse.backend.CudaBackend;
+import xyz.gatoware.synapse.dataset.Dataset;
 import xyz.gatoware.synapse.layer.DenseLayer;
 import xyz.gatoware.synapse.layer.Layer;
 import xyz.gatoware.synapse.matrix.Matrix;
+import xyz.gatoware.synapse.optimizer.Adam;
 
 public class DeviceTest {
 	@AfterEach
@@ -99,40 +102,52 @@ public class DeviceTest {
 	@Test
 	void residentCudaNetworkMatchesCpuWhenNvrtcAvailable() {
 		Assumptions.assumeTrue(Synapse.isDeviceAvailable(Devices.CUDA));
-
 		Matrix w1 = new Matrix(new float[][] {
-			{1.0f, -0.5f, 0.25f},
-			{-0.25f, 0.75f, 0.5f},
-			{0.5f, 0.5f, -1.0f},
-			{0.1f, -0.2f, 0.3f}
+			{1.0f, -0.5f, 0.25f}, {-0.25f, 0.75f, 0.5f},
+			{0.5f, 0.5f, -1.0f}, {0.1f, -0.2f, 0.3f}
 		});
 		Matrix b1 = new Matrix(new float[][] {{0.1f}, {-0.2f}, {0.3f}, {0.0f}});
 		Matrix w2 = new Matrix(new float[][] {
-			{0.5f, -0.25f, 0.75f, 0.1f},
-			{-0.5f, 0.5f, 0.25f, -0.2f}
+			{0.5f, -0.25f, 0.75f, 0.1f}, {-0.5f, 0.5f, 0.25f, -0.2f}
 		});
 		Matrix b2 = new Matrix(new float[][] {{0.05f}, {-0.1f}});
 		Matrix input = new Matrix(new float[][] {
-			{1.0f, 2.0f, -1.0f},
-			{0.5f, -0.5f, 1.5f},
-			{-1.0f, 0.25f, 0.75f}
+			{1.0f, 2.0f, -1.0f}, {0.5f, -0.5f, 1.5f}, {-1.0f, 0.25f, 0.75f}
 		});
-
 		NeuralNetwork cpuNetwork = new NeuralNetwork(new Layer[] {
-			new DenseLayer(w1.copy(), b1.copy(), new ReLU()),
-			new DenseLayer(w2.copy(), b2.copy(), new Softmax())
+			new DenseLayer(w1.copy(), b1.copy(), new ReLU()), new DenseLayer(w2.copy(), b2.copy(), new Softmax())
 		});
 		NeuralNetwork cudaNetwork = new NeuralNetwork(new Layer[] {
-			new DenseLayer(w1.copy(), b1.copy(), new ReLU()),
-			new DenseLayer(w2.copy(), b2.copy(), new Softmax())
+			new DenseLayer(w1.copy(), b1.copy(), new ReLU()), new DenseLayer(w2.copy(), b2.copy(), new Softmax())
 		});
-
 		Synapse.useDevice(Devices.CPU);
 		Matrix cpu = cpuNetwork.forward(input);
 		Synapse.useDevice(Devices.CUDA);
 		Assumptions.assumeTrue(((CudaBackend) Synapse.backend()).supportsResidentRelu());
 		Matrix cuda = cudaNetwork.forward(input);
 		assertMatrixEquals(cpu, cuda);
+	}
+
+	@Test
+	void cudaTrainingUpdatesAndMaterializesWeightsWhenAvailable() {
+		Assumptions.assumeTrue(Synapse.isDeviceAvailable(Devices.CUDA));
+		Synapse.useDevice(Devices.CUDA);
+		Assumptions.assumeTrue(((CudaBackend) Synapse.backend()).supportsResidentRelu());
+
+		DenseLayer hidden = new DenseLayer(2, 8, new ReLU());
+		DenseLayer output = new DenseLayer(8, 2, new Softmax());
+		NeuralNetwork network = new NeuralNetwork(new Layer[] {hidden, output});
+		Dataset dataset = new Dataset(
+			new Matrix(new float[][] {
+				{0.0f, 0.0f}, {0.0f, 1.0f}, {1.0f, 0.0f}, {1.0f, 1.0f},
+				{0.1f, 0.0f}, {0.0f, 0.9f}, {0.9f, 0.0f}, {1.0f, 0.9f}
+			}),
+			new Matrix(new float[][] {{0}, {1}, {1}, {0}, {0}, {1}, {1}, {0}}));
+		float before = hidden.getWeights().values[0][0];
+		network.fit(dataset, 2, 0.01f, new Adam());
+		float after = hidden.getWeights().values[0][0];
+		assertTrue(Float.isFinite(network.getLastLoss()));
+		assertNotEquals(before, after);
 	}
 
 	private static void assertMatrixEquals(Matrix expected, Matrix actual) {
