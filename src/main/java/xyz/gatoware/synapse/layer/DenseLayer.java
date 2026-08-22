@@ -60,7 +60,11 @@ public class DenseLayer implements Layer {
 		float[][] product = Synapse.backend().multiply(weights.values, input.values, outputSize, inputSize, batchSize);
 		lastCudaResident = false;
 
-		if (batchSize > 1) {
+		boolean cudaMaterialized = Synapse.backend() instanceof CudaBackend;
+		if (cudaMaterialized) {
+			((CudaBackend) Synapse.backend()).materialize(biases);
+		}
+		if (batchSize > 1 || cudaMaterialized) {
 			lastForwardWasBatch = true;
 			lastBatchInput = input;
 			lastBatchWeighted = new Matrix(outputSize, batchSize);
@@ -106,7 +110,6 @@ public class DenseLayer implements Layer {
 			&& cuda.supportsResidentRelu();
 	}
 
-	/** Runs this ReLU dense layer without materializing its result on the CPU. */
 	public Matrix forwardCudaResident(Matrix input) {
 		if (!(activationFunction instanceof ReLU))
 			throw new IllegalStateException("Resident CUDA forward currently supports ReLU layers only");
@@ -115,7 +118,7 @@ public class DenseLayer implements Layer {
 		if (input.rows() != weights.columns() || input.columns() <= 0)
 			throw new IllegalArgumentException("Dense layer input must have " + weights.columns() + " rows");
 		Matrix result = cuda.denseReluResident(weights, biases, input);
-		lastForwardWasBatch = input.columns() > 1;
+		lastForwardWasBatch = true;
 		lastCudaResident = true;
 		lastBatchInput = input;
 		lastBatchWeighted = null;
@@ -206,7 +209,6 @@ public class DenseLayer implements Layer {
 		return inputGradient;
 	}
 
-	/** Ensures GPU-updated parameters are visible through the public host arrays. */
 	public void materializeParameters() {
 		if (Synapse.backend() instanceof CudaBackend cuda) {
 			cuda.materialize(weights);
