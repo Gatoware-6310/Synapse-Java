@@ -4,6 +4,8 @@ import java.util.Arrays;
 
 import xyz.gatoware.synapse.Synapse;
 import xyz.gatoware.synapse.activation.ActivationFunction;
+import xyz.gatoware.synapse.activation.ReLU;
+import xyz.gatoware.synapse.backend.CudaBackend;
 import xyz.gatoware.synapse.matrix.Matrix;
 import xyz.gatoware.synapse.optimizer.Optimizer;
 import xyz.gatoware.synapse.optimizer.SGD;
@@ -26,27 +28,16 @@ public class DenseLayer implements Layer {
 	private float[] inputGradientValues;
 	private boolean lastForwardWasBatch;
 
-	/** Creates a dense layer with randomly initialized weights.
-	 * @param inputSize the amount of inputs
-	 * @param outputSize the amount of outputs
-	 * @param activationFunction the activation function
-	 */
 	public DenseLayer(int inputSize, int outputSize, ActivationFunction activationFunction) {
 		this.activationFunction = activationFunction;
 		this.weights = new Matrix(outputSize, inputSize);
 		this.biases = new Matrix(outputSize, 1);
-
 		float scale = (float) (1.0 / Math.sqrt(inputSize));
 		for (int i = 0; i < outputSize; i++)
 			for (int j = 0; j < inputSize; j++)
 				this.weights.values[i][j] = (float) ((Math.random() * 2 - 1) * scale);
 	}
 
-	/** Creates a dense layer from weights, biases, and an activation function.
-	 * @param weights the layer weights
-	 * @param biases the layer biases
-	 * @param activationFunction the activation function
-	 */
 	public DenseLayer(Matrix weights, Matrix biases, ActivationFunction activationFunction) {
 		if (weights.rows() != biases.rows() || biases.columns() != 1)
 			throw new IllegalArgumentException("Dense layer biases must have dimensions " + weights.rows() + " x 1");
@@ -56,11 +47,6 @@ public class DenseLayer implements Layer {
 	}
 
 	@Override
-	/** Runs the input through the dense layer. Multiple input columns are treated
-	 * as an inference batch, with one sample per column.
-	 * @param input the layer input
-	 * @return the layer output
-	 */
 	public Matrix forward(Matrix input) {
 		if (input.rows() != weights.columns() || input.columns() <= 0)
 			throw new IllegalArgumentException("Dense layer input must have " + weights.columns() + " rows");
@@ -93,17 +79,36 @@ public class DenseLayer implements Layer {
 		lastOutput.markDirty();
 		for (int i = 0; i < inputSize; i++)
 			lastInput.values[i][0] = input.values[i][0];
-
 		for (int neuron = 0; neuron < outputSize; neuron++) {
 			float sum = product[neuron][0] + biases.values[neuron][0];
 			lastWeightedInput.values[neuron][0] = sum;
 			weightedInputValues[neuron] = sum;
 		}
-
 		activationFunction.apply(weightedInputValues, outputValues);
 		for (int neuron = 0; neuron < outputSize; neuron++)
 			lastOutput.values[neuron][0] = outputValues[neuron];
 		return lastOutput.copy();
+	}
+
+	/** Returns true when this layer can use the no-readback CUDA inference path. */
+	public boolean canForwardCudaResident() {
+		return activationFunction instanceof ReLU
+			&& Synapse.backend() instanceof CudaBackend cuda
+			&& cuda.supportsResidentRelu();
+	}
+
+	/** Runs this ReLU dense layer without materializing its result on the CPU.
+	 * Intended for internal network inference chains only.
+	 */
+	public Matrix forwardCudaResident(Matrix input) {
+		if (!(activationFunction instanceof ReLU))
+			throw new IllegalStateException("Resident CUDA forward currently supports ReLU layers only");
+		if (!(Synapse.backend() instanceof CudaBackend cuda) || !cuda.supportsResidentRelu())
+			return forward(input);
+		if (input.rows() != weights.columns() || input.columns() <= 0)
+			throw new IllegalArgumentException("Dense layer input must have " + weights.columns() + " rows");
+		lastForwardWasBatch = input.columns() > 1;
+		return cuda.denseReluResident(weights, biases, input);
 	}
 
 	@Override
@@ -130,7 +135,6 @@ public class DenseLayer implements Layer {
 			outputGradientValues[i] = outputGradient.values[i][0];
 		}
 		activationFunction.backward(weightedInputValues, outputValues, outputGradientValues, weightedGradient);
-
 		Matrix inputGradient = new Matrix(weights.columns(), 1);
 		Arrays.fill(inputGradientValues, 0.0f);
 		for (int neuron = 0; neuron < weights.rows(); neuron++) {
