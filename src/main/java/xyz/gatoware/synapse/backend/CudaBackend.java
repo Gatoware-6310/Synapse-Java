@@ -14,29 +14,54 @@ public final class CudaBackend implements Backend {
 	private boolean closed;
 
 	/** Creates and initializes a CUDA backend.
-	 * @throws IllegalStateException if CUDA is not available
+	 * @throws IllegalStateException if CUDA or cuBLAS cannot be initialized
 	 */
 	public CudaBackend() {
-		JCuda.setExceptionsEnabled(true);
-		JCublas2.setExceptionsEnabled(true);
+		try {
+			JCuda.setExceptionsEnabled(true);
+			JCublas2.setExceptionsEnabled(true);
 
-		if (!isAvailable())
-			throw new IllegalStateException("CUDA is unavailable: no compatible NVIDIA CUDA device/driver was found");
+			int[] deviceCount = {0};
+			JCuda.cudaGetDeviceCount(deviceCount);
+			if (deviceCount[0] <= 0)
+				throw new IllegalStateException("No CUDA-capable NVIDIA device was found");
 
-		JCublas2.cublasCreate(handle);
+			JCublas2.cublasCreate(handle);
+		} catch (Throwable error) {
+			throw new IllegalStateException(
+				"CUDA backend could not initialize: " + rootMessage(error), error);
+		}
 	}
 
-	/** Checks whether a CUDA-capable device can be initialized.
+	/** Checks whether the complete CUDA backend can be initialized.
+	 * This verifies both the CUDA runtime/device and the cuBLAS native library.
 	 * @return whether CUDA is available
 	 */
 	public static boolean isAvailable() {
+		cublasHandle probeHandle = new cublasHandle();
+		boolean handleCreated = false;
 		try {
 			JCuda.setExceptionsEnabled(true);
+			JCublas2.setExceptionsEnabled(true);
+
 			int[] deviceCount = {0};
 			JCuda.cudaGetDeviceCount(deviceCount);
-			return deviceCount[0] > 0;
+			if (deviceCount[0] <= 0)
+				return false;
+
+			JCublas2.cublasCreate(probeHandle);
+			handleCreated = true;
+			return true;
 		} catch (Throwable ignored) {
 			return false;
+		} finally {
+			if (handleCreated) {
+				try {
+					JCublas2.cublasDestroy(probeHandle);
+				} catch (Throwable ignored) {
+					// Availability probing must never leak native cleanup errors.
+				}
+			}
 		}
 	}
 
@@ -115,6 +140,14 @@ public final class CudaBackend implements Backend {
 		for (int row = 0; row < rows; row++)
 			System.arraycopy(flattened, row * columns, matrix[row], 0, columns);
 		return matrix;
+	}
+
+	private static String rootMessage(Throwable error) {
+		Throwable root = error;
+		while (root.getCause() != null)
+			root = root.getCause();
+		String message = root.getMessage();
+		return message == null || message.isBlank() ? root.getClass().getSimpleName() : message;
 	}
 
 	@Override
