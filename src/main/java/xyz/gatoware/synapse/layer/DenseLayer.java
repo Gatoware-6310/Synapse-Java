@@ -24,6 +24,7 @@ public class DenseLayer implements Layer {
 	private float[] outputGradientValues;
 	private float[] weightedGradient;
 	private float[] inputGradientValues;
+	private boolean lastForwardWasBatch;
 
 	/** Creates a dense layer with randomly initialized weights.
 	 * @param inputSize the amount of inputs
@@ -36,11 +37,9 @@ public class DenseLayer implements Layer {
 		this.biases = new Matrix(outputSize, 1);
 
 		float scale = (float) (1.0 / Math.sqrt(inputSize));
-		for (int i = 0; i < outputSize; i++) {
-			for (int j = 0; j < inputSize; j++) {
+		for (int i = 0; i < outputSize; i++)
+			for (int j = 0; j < inputSize; j++)
 				this.weights.values[i][j] = (float) ((Math.random() * 2 - 1) * scale);
-			}
-		}
 	}
 
 	/** Creates a dense layer from weights, biases, and an activation function.
@@ -49,33 +48,52 @@ public class DenseLayer implements Layer {
 	 * @param activationFunction the activation function
 	 */
 	public DenseLayer(Matrix weights, Matrix biases, ActivationFunction activationFunction) {
-		if (weights.rows() != biases.rows() || biases.columns() != 1) {
+		if (weights.rows() != biases.rows() || biases.columns() != 1)
 			throw new IllegalArgumentException("Dense layer biases must have dimensions " + weights.rows() + " x 1");
-		}
-
 		this.weights = weights;
 		this.biases = biases;
 		this.activationFunction = activationFunction;
 	}
 
 	@Override
-	/** Runs the input through the dense layer.
+	/** Runs the input through the dense layer. Multiple input columns are treated
+	 * as an inference batch, with one sample per column.
 	 * @param input the layer input
 	 * @return the layer output
 	 */
 	public Matrix forward(Matrix input) {
-		if (input.rows() != weights.columns() || input.columns() != 1) {
-			throw new IllegalArgumentException("Dense layer input must have dimensions " + weights.columns() + " x 1");
-		}
+		if (input.rows() != weights.columns() || input.columns() <= 0)
+			throw new IllegalArgumentException("Dense layer input must have " + weights.columns() + " rows");
 
 		int inputSize = weights.columns();
 		int outputSize = weights.rows();
-		ensureTrainingBuffers(inputSize, outputSize);
+		int batchSize = input.columns();
+		float[][] product = Synapse.backend().multiply(weights.values, input.values,
+			outputSize, inputSize, batchSize);
 
+		if (batchSize > 1) {
+			lastForwardWasBatch = true;
+			Matrix result = new Matrix(outputSize, batchSize);
+			float[] weighted = new float[outputSize];
+			float[] activated = new float[outputSize];
+			for (int sample = 0; sample < batchSize; sample++) {
+				for (int neuron = 0; neuron < outputSize; neuron++)
+					weighted[neuron] = product[neuron][sample] + biases.values[neuron][0];
+				activationFunction.apply(weighted, activated);
+				for (int neuron = 0; neuron < outputSize; neuron++)
+					result.values[neuron][sample] = activated[neuron];
+			}
+			return result;
+		}
+
+		lastForwardWasBatch = false;
+		ensureTrainingBuffers(inputSize, outputSize);
+		lastInput.markDirty();
+		lastWeightedInput.markDirty();
+		lastOutput.markDirty();
 		for (int i = 0; i < inputSize; i++)
 			lastInput.values[i][0] = input.values[i][0];
 
-		float[][] product = Synapse.backend().multiply(weights.values, input.values, outputSize, inputSize, 1);
 		for (int neuron = 0; neuron < outputSize; neuron++) {
 			float sum = product[neuron][0] + biases.values[neuron][0];
 			lastWeightedInput.values[neuron][0] = sum;
@@ -89,23 +107,14 @@ public class DenseLayer implements Layer {
 	}
 
 	@Override
-	/** Updates the layer using backpropagation and stochastic gradient descent, then returns the input gradient.
-	 * @param outputGradient the gradient at the layer output
-	 * @param learningRate the training learning rate
-	 * @return the gradient at the layer input
-	 */
 	public Matrix backward(Matrix outputGradient, float learningRate) {
 		return backward(outputGradient, learningRate, new SGD());
 	}
 
 	@Override
-	/** Updates the layer using backpropagation and the given optimizer, then returns the input gradient.
-	 * @param outputGradient the gradient at the layer output
-	 * @param learningRate the training learning rate
-	 * @param optimizer the optimizer used to update weights and biases
-	 * @return the gradient at the layer input
-	 */
 	public Matrix backward(Matrix outputGradient, float learningRate, Optimizer optimizer) {
+		if (lastForwardWasBatch)
+			throw new IllegalStateException("Backward after a batched forward is not supported yet");
 		if (lastInput == null)
 			throw new IllegalStateException("Dense layer must run forward before backward");
 		if (outputGradient.rows() != weights.rows() || outputGradient.columns() != 1)
@@ -138,6 +147,8 @@ public class DenseLayer implements Layer {
 
 		optimizer.update(weights, weightGradients, learningRate);
 		optimizer.update(biases, biasGradients, learningRate);
+		weights.markDirty();
+		biases.markDirty();
 		return inputGradient;
 	}
 
@@ -158,25 +169,15 @@ public class DenseLayer implements Layer {
 		}
 	}
 
-	/** Returns the layer weights.
-	 * @return the layer weights
-	 */
 	public Matrix getWeights() {
 		return weights;
 	}
 
-	/** Returns the layer biases.
-	 * @return the layer biases
-	 */
 	public Matrix getBiases() {
 		return biases;
 	}
 
-	/** Returns the layer activation function.
-	 * @return the activation function
-	 */
 	public ActivationFunction getActivationFunction() {
 		return activationFunction;
 	}
-
 }
