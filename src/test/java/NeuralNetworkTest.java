@@ -11,7 +11,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
+import xyz.gatoware.synapse.Devices;
 import xyz.gatoware.synapse.NeuralNetwork;
+import xyz.gatoware.synapse.Synapse;
 import xyz.gatoware.synapse.activation.ReLU;
 import xyz.gatoware.synapse.activation.Sigmoid;
 import xyz.gatoware.synapse.activation.Softmax;
@@ -19,6 +21,7 @@ import xyz.gatoware.synapse.dataset.Dataset;
 import xyz.gatoware.synapse.layer.DenseLayer;
 import xyz.gatoware.synapse.loss.SparseCategoricalCrossEntropy;
 import xyz.gatoware.synapse.matrix.Matrix;
+import xyz.gatoware.synapse.optimizer.SGD;
 import xyz.gatoware.synapse.layer.*;
 
 public class NeuralNetworkTest {
@@ -157,6 +160,29 @@ public class NeuralNetworkTest {
 		assertEquals(1, network.predict(dataset.getInput(1)));
 		assertTrue(network.getLastLoss() < 0.1f);
 		assertTrue(hidden.getWeights().values[0][0] != hiddenWeightsBefore.values[0][0]);
+	}
+
+	@Test
+	void fitHonorsBatchSizeOnCpu() {
+		Synapse.useDevice(Devices.CPU);
+		Dataset dataset = new Dataset(
+			new Matrix(new float[][] {
+				{1.0f, 0.0f}, {0.0f, 1.0f}, {1.0f, 1.0f}, {0.5f, 0.25f}
+			}),
+			new Matrix(new float[][] {{0.0f}, {1.0f}, {1.0f}, {0.0f}}));
+		DenseLayer hidden = new DenseLayer(
+			new Matrix(new float[][] {{0.5f, -0.25f}, {0.25f, 0.5f}}),
+			new Matrix(new float[][] {{0.1f}, {0.1f}}), new ReLU());
+		DenseLayer output = new DenseLayer(
+			new Matrix(new float[][] {{0.2f, -0.1f}, {-0.2f, 0.1f}}),
+			new Matrix(new float[][] {{0.0f}, {0.0f}}), new Softmax());
+		NeuralNetwork network = new NeuralNetwork(new Layer[] {hidden, output});
+		float before = hidden.getWeights().values[0][0];
+
+		network.fit(dataset, new SparseCategoricalCrossEntropy(), 2, 0.05f, new SGD(), 2);
+
+		assertTrue(Float.isFinite(network.getLastLoss()));
+		assertTrue(hidden.getWeights().values[0][0] != before);
 	}
 
 	@Test

@@ -1,5 +1,6 @@
 package xyz.gatoware.synapse.matrix;
 
+import xyz.gatoware.synapse.Synapse;
 import xyz.gatoware.synapse.activation.ActivationFunction;
 
 /** A wrapper for the type float[][] with extra functionality. */
@@ -16,7 +17,6 @@ public class Matrix {
 	public Matrix(int rows, int columns) {
 		this.rows = rows;
 		this.columns = columns;
-
 		this.values = new float[rows][columns];
 	}
 
@@ -25,9 +25,18 @@ public class Matrix {
 	 */
 	public Matrix(float[][] values) {
 		this.values = values;
-
 		this.rows = values.length;
 		this.columns = values[0].length;
+	}
+
+	/** Marks this matrix as modified on the CPU.
+	 * Call this after changing {@link #values} directly when using CUDA so a
+	 * cached device copy is not reused.
+	 * @return this matrix
+	 */
+	public Matrix markDirty() {
+		Synapse.backend().invalidate(values);
+		return this;
 	}
 
 	/** Returns a copy of this matrix.
@@ -37,7 +46,6 @@ public class Matrix {
 		float[][] copy = new float[this.rows][this.columns];
 		for (int i = 0; i < this.rows; i++)
 			System.arraycopy(this.values[i], 0, copy[i], 0, this.columns);
-
 		return new Matrix(copy);
 	}
 
@@ -45,13 +53,12 @@ public class Matrix {
 	 * @return this transposed matrix
 	 */
 	public Matrix transpose() {
+		markDirty();
 		float[][] m = this.values;
-
 		float[][] temp = new float[m[0].length][m.length];
 		for (int i = 0; i < m.length; i++)
 			for (int j = 0; j < m[0].length; j++)
 				temp[j][i] = m[i][j];
-
 		this.values = temp;
 		return this;
 	}
@@ -61,20 +68,17 @@ public class Matrix {
 	 * @return this matrix after addition
 	 */
 	public Matrix add(Matrix m2) {
-		if (this.columns() != m2.columns() || this.rows() != m2.rows()) {
+		if (this.columns() != m2.columns() || this.rows() != m2.rows())
 			throw new IllegalArgumentException("Matrix dimensions are incompatible!");
-		}
-
+		markDirty();
 		int rows = this.rows();
 		int cols = this.columns();
-
 		for (int i = 0; i < rows; i++) {
 			float[] leftRow = this.values[i];
 			float[] rightRow = m2.values[i];
 			for (int j = 0; j < cols; j++)
 				leftRow[j] += rightRow[j];
 		}
-
 		return this;
 	}
 
@@ -83,58 +87,26 @@ public class Matrix {
 	 * @return this matrix after subtraction
 	 */
 	public Matrix subtract(Matrix m2) {
-		if (this.columns() != m2.columns() || this.rows() != m2.rows()) {
+		if (this.columns() != m2.columns() || this.rows() != m2.rows())
 			throw new IllegalArgumentException("Matrix dimensions are incompatible!");
-		}
-
+		markDirty();
 		int rows = this.rows();
 		int cols = this.columns();
-
-		for (int i = 0; i < rows; i++) {
-			for (int j = 0; j < cols; j++) {
+		for (int i = 0; i < rows; i++)
+			for (int j = 0; j < cols; j++)
 				this.values[i][j] -= m2.values[i][j];
-			}
-		}
-
 		return this;
 	}
 
-	/** Multiplies this matrix by another matrix and returns it.
+	/** Multiplies this matrix by another matrix using the currently selected Synapse device and returns it.
 	 * @param m2 the matrix to multiply by
 	 * @return this matrix after multiplication
 	 */
 	public Matrix multiply(Matrix m2) {
-		if (this.columns() != m2.rows()) {
+		if (this.columns() != m2.rows())
 			throw new IllegalArgumentException("Matrix dimensions are incompatible!");
-		}
-
-		int resultColumns = m2.columns;
-		float[][] product = new float[this.rows][resultColumns];
-		if (resultColumns == 1) {
-			for (int i = 0; i < this.rows; i++) {
-				float sum = 0.0f;
-				float[] leftRow = this.values[i];
-				for (int k = 0; k < this.columns; k++)
-					sum += leftRow[k] * m2.values[k][0];
-				product[i][0] = sum;
-			}
-			this.values = product;
-			this.columns = 1;
-			return this;
-		}
-
-		for (int i = 0; i < this.rows; i++) {
-			float[] leftRow = this.values[i];
-			float[] productRow = product[i];
-			for (int k = 0; k < this.columns; k++) {
-				float leftValue = leftRow[k];
-				float[] rightRow = m2.values[k];
-				for (int j = 0; j < resultColumns; j++)
-					productRow[j] += leftValue * rightRow[j];
-			}
-		}
-
-		this.values = product;
+		int resultColumns = m2.columns();
+		this.values = Synapse.backend().multiply(this.values, m2.values, this.rows, this.columns, resultColumns);
 		this.columns = resultColumns;
 		return this;
 	}
@@ -144,11 +116,10 @@ public class Matrix {
 	 * @return this matrix after multiplication
 	 */
 	public Matrix multiply(float scalar) {
-		for (int i = 0; i < this.rows; i++) {
-			for (int j = 0; j < this.columns; j++) {
+		markDirty();
+		for (int i = 0; i < this.rows; i++)
+			for (int j = 0; j < this.columns; j++)
 				this.values[i][j] *= scalar;
-			}
-		}
 		return this;
 	}
 
@@ -157,16 +128,12 @@ public class Matrix {
 	 * @return this matrix after multiplication
 	 */
 	public Matrix multiply_hadamard(Matrix m2) {
-		if (this.columns() != m2.columns() || this.rows() != m2.rows()) {
+		if (this.columns() != m2.columns() || this.rows() != m2.rows())
 			throw new IllegalArgumentException("Matrix dimensions are incompatible!");
-		}
-
-		for (int i = 0; i < this.rows; i++) {
-			for (int j = 0; j < this.columns; j++) {
+		markDirty();
+		for (int i = 0; i < this.rows; i++)
+			for (int j = 0; j < this.columns; j++)
 				this.values[i][j] *= m2.values[i][j];
-			}
-		}
-
 		return this;
 	}
 
@@ -175,11 +142,11 @@ public class Matrix {
 	 * @return this matrix after applying the function
 	 */
 	public Matrix apply(ActivationFunction func) {
+		markDirty();
 		if (rows == 1 || columns == 1) {
 			float[] vector = new float[Math.max(rows, columns)];
 			for (int i = 0; i < vector.length; i++)
 				vector[i] = rows == 1 ? values[0][i] : values[i][0];
-
 			vector = func.apply(vector);
 			for (int i = 0; i < vector.length; i++) {
 				if (rows == 1)
@@ -189,11 +156,9 @@ public class Matrix {
 			}
 			return this;
 		}
-
 		for (int i = 0; i < rows; i++)
 			for (int j = 0; j < columns; j++)
 				values[i][j] = func.apply(values[i][j]);
-
 		return this;
 	}
 
@@ -210,5 +175,4 @@ public class Matrix {
 	public int columns() {
 		return columns;
 	}
-
 }

@@ -21,6 +21,7 @@ import xyz.gatoware.synapse.activation.Sigmoid;
 import xyz.gatoware.synapse.activation.Softmax;
 import xyz.gatoware.synapse.activation.Swish;
 import xyz.gatoware.synapse.activation.Tanh;
+import xyz.gatoware.synapse.backend.CudaBackend;
 import xyz.gatoware.synapse.dataset.Dataset;
 import xyz.gatoware.synapse.layer.DenseLayer;
 import xyz.gatoware.synapse.layer.Layer;
@@ -40,38 +41,24 @@ public class NeuralNetwork {
 	private List<Layer> layers = new ArrayList<>();
 	private float lastLoss = Float.NaN;
 
-	/** Creates an empty neural network. */
 	public NeuralNetwork() {
 		// here for compatibility
 	}
 
-	/** Creates a neural network from a list of layers.
-	 * @param layerList the layers in the network
-	 */
 	public NeuralNetwork(Layer[] layerList) {
-		for (Layer l : layerList) {
+		for (Layer l : layerList)
 			addLayer(l);
-		}
 	}
 
-	/** An easier way to instantiate a neural network - creates a neural network with the specified amount of inputs, layers, and outputs.
-	 * @param inputs the amount of inputs taken
-	 * @param layerSize the amount of neurons per layer
-	 * @param layers the amount of layers
-	 * @param outputs the amount of outputs
-	 */
 	public NeuralNetwork(int inputs, int layerSize, int layers, int outputs) {
 		if (inputs <= 0)
-		throw new IllegalArgumentException("inputs must be greater than 0");
-
+			throw new IllegalArgumentException("inputs must be greater than 0");
 		if (layerSize <= 0)
-		throw new IllegalArgumentException("layerSize must be greater than 0");
-
+			throw new IllegalArgumentException("layerSize must be greater than 0");
 		if (layers < 0)
-		throw new IllegalArgumentException("layers cannot be negative");
-
+			throw new IllegalArgumentException("layers cannot be negative");
 		if (outputs <= 0)
-		throw new IllegalArgumentException("outputs must be greater than 0");
+			throw new IllegalArgumentException("outputs must be greater than 0");
 
 		if (layers == 0) {
 			addLayer(new DenseLayer(inputs, outputs, new Softmax()));
@@ -79,76 +66,251 @@ public class NeuralNetwork {
 		}
 
 		addLayer(new DenseLayer(inputs, layerSize, new ReLU()));
-
 		for (int i = 1; i < layers; i++)
 			addLayer(new DenseLayer(layerSize, layerSize, new ReLU()));
-
 		addLayer(new DenseLayer(layerSize, outputs, new Softmax()));
 	}
 
-	/** Adds a layer to the neural network.
-	 * @param layer the layer to add
-	 */
 	public void addLayer(Layer layer) {
 		layers.add(layer);
 	}
 
-	/** Runs the input through every layer and returns the output.
-	 * @param input the network input
-	 * @return the network output
-	 */
+	/** Runs the input through every layer and returns the output. */
 	public Matrix forward(Matrix input) {
 		Matrix output = input;
-		for (Layer layer : layers)
-			output = layer.forward(output);
-
+		for (int i = 0; i < layers.size(); i++) {
+			Layer layer = layers.get(i);
+			boolean hiddenLayer = i < layers.size() - 1;
+			if (hiddenLayer && layer instanceof DenseLayer denseLayer && denseLayer.canForwardCudaResident())
+				output = denseLayer.forwardCudaResident(output);
+			else
+				output = layer.forward(output);
+		}
 		return output;
 	}
 
-	/** Trains the network on a dataset using the given loss function and Adam optimizer.
-	 * @param dataset the dataset to train on
-	 * @param lossFunction the loss function to use
-	 * @param epochs the amount of training epochs
-	 * @param learningRate the training learning rate
-	 */
+	private Matrix forwardTraining(Matrix input) {
+		Matrix output = input;
+		for (Layer layer : layers)
+			output = layer.forward(output);
+		return output;
+	}
+
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate) {
 		fit(dataset, lossFunction, epochs, learningRate, new Adam(), false);
 	}
 
-	/** Trains the network on a dataset using the given loss function and optimizer.
-	 * @param dataset the dataset to train on
-	 * @param lossFunction the loss function to use
-	 * @param epochs the amount of training epochs
-	 * @param learningRate the training learning rate
-	 * @param optimizer the optimizer to use
-	 */
+	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
+			final int batchSize) {
+		fit(dataset, lossFunction, epochs, learningRate, new Adam(), false, batchSize);
+	}
+
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
 			final Optimizer optimizer) {
 		fit(dataset, lossFunction, epochs, learningRate, optimizer, false);
 	}
 
-	/** Trains the network on a dataset using the given loss function and Adam optimizer, optionally logging the average loss and classification accuracy after every epoch.
-	 * @param dataset the dataset to train on
-	 * @param lossFunction the loss function to use
-	 * @param epochs the amount of training epochs
-	 * @param learningRate the training learning rate
-	 * @param logging whether to log after every epoch
-	 */
+	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
+			final Optimizer optimizer, final int batchSize) {
+		fit(dataset, lossFunction, epochs, learningRate, optimizer, false, batchSize);
+	}
+
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
 			final boolean logging) {
 		fit(dataset, lossFunction, epochs, learningRate, new Adam(), logging);
 	}
 
-	/** Trains the network on a dataset using the given loss function and optimizer, optionally logging the average loss and classification accuracy after every epoch.
-	 * @param dataset the dataset to train on
-	 * @param lossFunction the loss function to use
-	 * @param epochs the amount of training epochs
-	 * @param learningRate the training learning rate
-	 * @param optimizer the optimizer to use
-	 * @param logging whether to log after every epoch
-	 */
+	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
+			final boolean logging, final int batchSize) {
+		fit(dataset, lossFunction, epochs, learningRate, new Adam(), logging, batchSize);
+	}
+
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
 			final Optimizer optimizer, final boolean logging) {
+		validateTrainingArguments(dataset, lossFunction, epochs, learningRate, optimizer);
+		if (canUseCudaTraining()) {
+			fitCuda(dataset, lossFunction, epochs, learningRate, optimizer, logging, Synapse.getCudaBatchSize());
+			return;
+		}
+		fitCpu(dataset, lossFunction, epochs, learningRate, optimizer, logging, 1);
+	}
+
+	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
+			final Optimizer optimizer, final boolean logging, final int batchSize) {
+		validateTrainingArguments(dataset, lossFunction, epochs, learningRate, optimizer);
+		if (batchSize <= 0)
+			throw new IllegalArgumentException("Batch size must be positive");
+		if (canUseCudaTraining()) {
+			fitCuda(dataset, lossFunction, epochs, learningRate, optimizer, logging, batchSize);
+			return;
+		}
+		fitCpu(dataset, lossFunction, epochs, learningRate, optimizer, logging, batchSize);
+	}
+
+	private void fitCpu(Dataset dataset, LossFunction lossFunction, int epochs, float learningRate,
+			Optimizer optimizer, boolean logging, int batchSize) {
+		int[] order = makeOrder(dataset.size());
+		Random random = new Random();
+		int featureCount = dataset.getInputs().columns();
+
+		for (int epoch = 0; epoch < epochs; epoch++) {
+			shuffle(order, random);
+			float totalLoss = 0.0f;
+
+			for (int start = 0; start < order.length; start += batchSize) {
+				int currentBatchSize = Math.min(batchSize, order.length - start);
+				Matrix batchInput = new Matrix(featureCount, currentBatchSize);
+				for (int sample = 0; sample < currentBatchSize; sample++) {
+					int index = order[start + sample];
+					for (int feature = 0; feature < featureCount; feature++)
+						batchInput.values[feature][sample] = dataset.getInputs().values[index][feature];
+				}
+
+				Matrix output = forwardTraining(batchInput);
+				Matrix outputGradient = new Matrix(output.rows(), currentBatchSize);
+				for (int sample = 0; sample < currentBatchSize; sample++) {
+					int index = order[start + sample];
+					Matrix predicted = rowFromColumn(output, sample);
+					Matrix actual = rowVector(dataset.getTarget(index));
+					totalLoss += lossFunction.calculate(predicted, actual);
+					Matrix sampleGradient = lossFunction.gradient(predicted, actual);
+					if (sampleGradient.rows() != 1 || sampleGradient.columns() != output.rows())
+						throw new IllegalStateException("Loss gradient must match the network output width");
+					for (int neuron = 0; neuron < output.rows(); neuron++)
+						outputGradient.values[neuron][sample] = sampleGradient.values[0][neuron];
+				}
+
+				Matrix gradient = outputGradient;
+				for (int layer = layers.size() - 1; layer >= 0; layer--)
+					gradient = layers.get(layer).backward(gradient, learningRate, optimizer);
+			}
+
+			lastLoss = totalLoss / dataset.size();
+			if (logging)
+				System.out.printf("Epoch %d loss: %.6f accuracy: %.2f%%%n", epoch + 1, lastLoss,
+					accuracy(dataset) * 100.0f);
+		}
+	}
+
+	/** CUDA training keeps the standard Dense/ReLU/Softmax classifier path on the GPU.
+	 * For Softmax + SparseCategoricalCrossEntropy, the final affine transform, bias,
+	 * stable Softmax, cross-entropy derivative, final-layer backward, and optimizer
+	 * update are fused into the CUDA backend without materializing probabilities.
+	 */
+	private void fitCuda(Dataset dataset, LossFunction lossFunction, int epochs, float learningRate,
+			Optimizer optimizer, boolean logging, int cudaBatchSize) {
+		int[] order = makeOrder(dataset.size());
+		Random random = new Random();
+		int featureCount = dataset.getInputs().columns();
+		int finalLayerIndex = layers.size() - 1;
+		boolean fusedSoftmaxCrossEntropy = lossFunction instanceof SparseCategoricalCrossEntropy
+			&& layers.get(finalLayerIndex) instanceof DenseLayer finalDense
+			&& finalDense.getActivationFunction() instanceof Softmax
+			&& dataset.getTargets().columns() == 1;
+
+		try {
+			for (int epoch = 0; epoch < epochs; epoch++) {
+				shuffle(order, random);
+				float totalLoss = 0.0f;
+
+				for (int start = 0; start < order.length; start += cudaBatchSize) {
+					int batchSize = Math.min(cudaBatchSize, order.length - start);
+					Matrix batchInput = new Matrix(featureCount, batchSize);
+					for (int sample = 0; sample < batchSize; sample++) {
+						int index = order[start + sample];
+						for (int feature = 0; feature < featureCount; feature++)
+							batchInput.values[feature][sample] = dataset.getInputs().values[index][feature];
+					}
+
+					if (fusedSoftmaxCrossEntropy) {
+						Matrix hiddenOutput = batchInput;
+						for (int layerIndex = 0; layerIndex < finalLayerIndex; layerIndex++)
+							hiddenOutput = ((DenseLayer) layers.get(layerIndex)).forwardCudaResident(hiddenOutput);
+
+						int[] targets = new int[batchSize];
+						for (int sample = 0; sample < batchSize; sample++) {
+							int index = order[start + sample];
+							float classId = dataset.getTargets().values[index][0];
+							int target = (int) classId;
+							if (classId != target)
+								throw new IllegalArgumentException("Actual matrix must contain integer class IDs");
+							targets[sample] = target;
+						}
+
+						DenseLayer finalLayer = (DenseLayer) layers.get(finalLayerIndex);
+						CudaBackend cuda = (CudaBackend) Synapse.backend();
+						CudaBackend.SoftmaxTrainingResult step = cuda.denseSoftmaxCrossEntropyBackwardUpdate(
+							finalLayer.getWeights(), finalLayer.getBiases(), hiddenOutput,
+							targets, optimizer, learningRate);
+						totalLoss += step.loss() * batchSize;
+						Matrix gradient = step.inputGradient();
+						for (int layerIndex = finalLayerIndex - 1; layerIndex >= 0; layerIndex--)
+							gradient = layers.get(layerIndex).backward(gradient, learningRate, optimizer);
+					} else {
+						Matrix output = batchInput;
+						for (int layerIndex = 0; layerIndex < layers.size(); layerIndex++) {
+							DenseLayer dense = (DenseLayer) layers.get(layerIndex);
+							if (layerIndex < finalLayerIndex)
+								output = dense.forwardCudaResident(output);
+							else
+								output = dense.forward(output);
+						}
+
+						Matrix outputGradient = new Matrix(output.rows(), batchSize);
+						for (int sample = 0; sample < batchSize; sample++) {
+							int index = order[start + sample];
+							Matrix predicted = rowFromColumn(output, sample);
+							Matrix actual = rowVector(dataset.getTarget(index));
+							totalLoss += lossFunction.calculate(predicted, actual);
+							Matrix sampleGradient = lossFunction.gradient(predicted, actual);
+							if (sampleGradient.rows() != 1 || sampleGradient.columns() != output.rows())
+								throw new IllegalStateException("Loss gradient must match the network output width");
+							for (int neuron = 0; neuron < output.rows(); neuron++)
+								outputGradient.values[neuron][sample] = sampleGradient.values[0][neuron];
+						}
+						Matrix gradient = outputGradient;
+						for (int layerIndex = finalLayerIndex; layerIndex >= 0; layerIndex--)
+							gradient = layers.get(layerIndex).backward(gradient, learningRate, optimizer);
+					}
+				}
+
+				lastLoss = totalLoss / dataset.size();
+				if (logging)
+					System.out.printf("Epoch %d loss: %.6f accuracy: %.2f%%%n", epoch + 1, lastLoss,
+						accuracy(dataset) * 100.0f);
+			}
+		} finally {
+			materializeCudaParameters();
+		}
+	}
+
+	private boolean canUseCudaTraining() {
+		if (!(Synapse.backend() instanceof CudaBackend) || layers.isEmpty())
+			return false;
+		for (int i = 0; i < layers.size(); i++) {
+			if (!(layers.get(i) instanceof DenseLayer dense))
+				return false;
+			if (i < layers.size() - 1 && !dense.canForwardCudaResident())
+				return false;
+		}
+		return true;
+	}
+
+	private void materializeCudaParameters() {
+		for (Layer layer : layers)
+			if (layer instanceof DenseLayer dense)
+				dense.materializeParameters();
+	}
+
+	private static int[] makeOrder(int size) {
+		int[] order = new int[size];
+		for (int i = 0; i < size; i++)
+			order[i] = i;
+		return order;
+	}
+
+	private void validateTrainingArguments(Dataset dataset, LossFunction lossFunction, int epochs,
+			float learningRate, Optimizer optimizer) {
 		if (dataset == null)
 			throw new IllegalArgumentException("Dataset cannot be null");
 		if (lossFunction == null)
@@ -163,96 +325,55 @@ public class NeuralNetwork {
 			throw new IllegalArgumentException("Epochs must be positive");
 		if (!Float.isFinite(learningRate) || learningRate <= 0.0f)
 			throw new IllegalArgumentException("Learning rate must be positive and finite");
-
-		int[] order = new int[dataset.size()];
-		for (int i = 0; i < order.length; i++)
-			order[i] = i;
-		Random random = new Random();
-
-		for (int epoch = 0; epoch < epochs; epoch++) {
-			shuffle(order, random);
-			float totalLoss = 0.0f;
-
-			for (int index : order) {
-				Matrix output = forward(dataset.getInput(index));
-				Matrix predicted = rowVector(output);
-				Matrix actual = rowVector(dataset.getTarget(index));
-				totalLoss += lossFunction.calculate(predicted, actual);
-
-				Matrix gradient = columnVector(lossFunction.gradient(predicted, actual));
-				for (int layer = layers.size() - 1; layer >= 0; layer--)
-					gradient = layers.get(layer).backward(gradient, learningRate, optimizer);
-			}
-
-			lastLoss = totalLoss / dataset.size();
-
-			if (logging) {
-				System.out.printf("Epoch %d loss: %.6f accuracy: %.2f%%%n", epoch + 1, lastLoss,
-					accuracy(dataset) * 100.0f);
-			}
-		}
 	}
 
-	/** Trains the network using SparseCategoricalCrossEntropy and Adam by default.
-	 * @param dataset the dataset to train on
-	 * @param epochs the amount of training epochs
-	 * @param learningRate the training learning rate
-	 */
 	public void fit(final Dataset dataset, final int epochs, final float learningRate) {
 		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, new Adam(), false);
 	}
 
-	/** Trains the network using SparseCategoricalCrossEntropy and the given optimizer.
-	 * @param dataset the dataset to train on
-	 * @param epochs the amount of training epochs
-	 * @param learningRate the training learning rate
-	 * @param optimizer the optimizer to use
-	 */
+	public void fit(final Dataset dataset, final int epochs, final float learningRate, final int batchSize) {
+		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, new Adam(), false, batchSize);
+	}
+
 	public void fit(final Dataset dataset, final int epochs, final float learningRate, final Optimizer optimizer) {
 		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, optimizer, false);
 	}
 
-	/** Trains the network using SparseCategoricalCrossEntropy and Adam by default, optionally logging after every epoch.
-	 * @param dataset the dataset to train on
-	 * @param epochs the amount of training epochs
-	 * @param learningRate the training learning rate
-	 * @param logging whether to log after every epoch
-	 */
+	public void fit(final Dataset dataset, final int epochs, final float learningRate,
+			final Optimizer optimizer, final int batchSize) {
+		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, optimizer, false, batchSize);
+	}
+
 	public void fit(final Dataset dataset, final int epochs, final float learningRate, final boolean logging) {
 		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, new Adam(), logging);
 	}
 
-	/** Trains the network using SparseCategoricalCrossEntropy and the given optimizer, optionally logging after every epoch.
-	 * @param dataset the dataset to train on
-	 * @param epochs the amount of training epochs
-	 * @param learningRate the training learning rate
-	 * @param optimizer the optimizer to use
-	 * @param logging whether to log after every epoch
-	 */
+	public void fit(final Dataset dataset, final int epochs, final float learningRate,
+			final boolean logging, final int batchSize) {
+		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, new Adam(), logging, batchSize);
+	}
+
 	public void fit(final Dataset dataset, final int epochs, final float learningRate, final Optimizer optimizer,
 			final boolean logging) {
 		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, optimizer, logging);
 	}
 
-	/** Returns the most recent average loss after training.
-	 * @return the most recent average loss
-	 */
+	public void fit(final Dataset dataset, final int epochs, final float learningRate, final Optimizer optimizer,
+			final boolean logging, final int batchSize) {
+		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, optimizer, logging, batchSize);
+	}
+
 	public float getLastLoss() {
 		return lastLoss;
 	}
 
-	/** Returns the index of the largest value in the network output.
-	 * @param input the network input
-	 * @return the index of the largest output value
-	 */
 	public int predict(Matrix input) {
 		Matrix output = forward(input);
-		if (output.rows() == 0 || output.columns() == 0 || (output.rows() != 1 && output.columns() != 1)) {
+		if (output.rows() == 0 || output.columns() == 0 || (output.rows() != 1 && output.columns() != 1))
 			throw new IllegalStateException("Network output must be a non-empty vector");
-		}
 
 		int prediction = 0;
-		float highest = output.rows() == 1 ? output.values[0][0] : output.values[0][0];
+		float highest = output.values[0][0];
 		int length = Math.max(output.rows(), output.columns());
 		for (int i = 1; i < length; i++) {
 			float value = output.rows() == 1 ? output.values[0][i] : output.values[i][0];
@@ -261,14 +382,9 @@ public class NeuralNetwork {
 				prediction = i;
 			}
 		}
-
 		return prediction;
 	}
 
-	/** Returns the fraction of dataset samples classified correctly.
-	 * @param dataset the dataset to evaluate
-	 * @return the fraction classified correctly
-	 */
 	public float accuracy(Dataset dataset) {
 		if (dataset == null)
 			throw new IllegalArgumentException("Dataset cannot be null");
@@ -281,7 +397,6 @@ public class NeuralNetwork {
 			if (predict(dataset.getInput(i)) == target)
 				correct++;
 		}
-
 		return (float) correct / dataset.size();
 	}
 
@@ -290,10 +405,16 @@ public class NeuralNetwork {
 			return vector.copy();
 		if (vector.columns() != 1)
 			throw new IllegalArgumentException("Expected a vector");
-
 		Matrix result = new Matrix(1, vector.rows());
 		for (int i = 0; i < vector.rows(); i++)
 			result.values[0][i] = vector.values[i][0];
+		return result;
+	}
+
+	private static Matrix rowFromColumn(Matrix matrix, int column) {
+		Matrix result = new Matrix(1, matrix.rows());
+		for (int row = 0; row < matrix.rows(); row++)
+			result.values[0][row] = matrix.values[row][column];
 		return result;
 	}
 
@@ -302,7 +423,6 @@ public class NeuralNetwork {
 			return vector.copy();
 		if (vector.rows() != 1)
 			throw new IllegalArgumentException("Expected a vector");
-
 		Matrix result = new Matrix(vector.columns(), 1);
 		for (int i = 0; i < vector.columns(); i++)
 			result.values[i][0] = vector.values[0][i];
@@ -318,29 +438,19 @@ public class NeuralNetwork {
 		}
 	}
 
-	/** Saves the model to a file.
-	 * @param filename the file to save to
-	 * @throws IOException if the model cannot be saved
-	 */
 	public void save(String filename) throws IOException {
 		save(Path.of(filename));
 	}
 
-	/** Saves the model to a path.
-	 * @param path the path to save to
-	 * @throws IOException if the model cannot be saved
-	 */
 	public void save(Path path) throws IOException {
+		materializeCudaParameters();
 		try (DataOutputStream output = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(path)))) {
 			output.writeInt(FILE_MAGIC);
 			output.writeInt(FILE_VERSION);
 			output.writeInt(layers.size());
-
 			for (Layer layer : layers) {
-				if (!(layer instanceof DenseLayer)) {
+				if (!(layer instanceof DenseLayer))
 					throw new IOException("Only DenseLayer instances can be saved");
-				}
-
 				DenseLayer denseLayer = (DenseLayer) layer;
 				writeMatrix(output, denseLayer.getWeights());
 				writeMatrix(output, denseLayer.getBiases());
@@ -349,44 +459,29 @@ public class NeuralNetwork {
 		}
 	}
 
-	/** Loads a model from a file.
-	 * @param filename the file to load
-	 * @return the loaded neural network
-	 * @throws IOException if the model cannot be loaded
-	 */
 	public static NeuralNetwork load(String filename) throws IOException {
 		return load(Path.of(filename));
 	}
 
-	/** Loads a model from a path.
-	 * @param path the path to load
-	 * @return the loaded neural network
-	 * @throws IOException if the model cannot be loaded
-	 */
 	public static NeuralNetwork load(Path path) throws IOException {
 		try (DataInputStream input = new DataInputStream(new BufferedInputStream(Files.newInputStream(path)))) {
-			if (input.readInt() != FILE_MAGIC) {
+			if (input.readInt() != FILE_MAGIC)
 				throw new IOException("Not a Synapse neural network file");
-			}
-			if (input.readInt() != FILE_VERSION) {
+			if (input.readInt() != FILE_VERSION)
 				throw new IOException("Unsupported Synapse neural network file version");
-			}
 
 			int layerCount = input.readInt();
-			if (layerCount < 0 || layerCount > MAX_LAYERS) {
+			if (layerCount < 0 || layerCount > MAX_LAYERS)
 				throw new IOException("Invalid layer count");
-			}
 
 			NeuralNetwork network = new NeuralNetwork();
 			for (int i = 0; i < layerCount; i++) {
 				Matrix weights = readMatrix(input);
 				Matrix biases = readMatrix(input);
-				if (weights.rows() != biases.rows() || biases.columns() != 1) {
+				if (weights.rows() != biases.rows() || biases.columns() != 1)
 					throw new IOException("Invalid dense layer dimensions");
-				}
 				network.addLayer(new DenseLayer(weights, biases, readActivation(input)));
 			}
-
 			return network;
 		}
 	}
@@ -394,27 +489,22 @@ public class NeuralNetwork {
 	private static void writeMatrix(DataOutputStream output, Matrix matrix) throws IOException {
 		output.writeInt(matrix.rows());
 		output.writeInt(matrix.columns());
-		for (int row = 0; row < matrix.rows(); row++) {
-			for (int column = 0; column < matrix.columns(); column++) {
+		for (int row = 0; row < matrix.rows(); row++)
+			for (int column = 0; column < matrix.columns(); column++)
 				output.writeFloat(matrix.values[row][column]);
-			}
-		}
 	}
 
 	private static Matrix readMatrix(DataInputStream input) throws IOException {
 		int rows = input.readInt();
 		int columns = input.readInt();
 		if (rows <= 0 || columns <= 0 || rows > MAX_MATRIX_DIMENSION || columns > MAX_MATRIX_DIMENSION
-				|| (long) rows * columns > MAX_MATRIX_DIMENSION) {
+				|| (long) rows * columns > MAX_MATRIX_DIMENSION)
 			throw new IOException("Invalid matrix dimensions");
-		}
 
 		Matrix matrix = new Matrix(rows, columns);
-		for (int row = 0; row < rows; row++) {
-			for (int column = 0; column < columns; column++) {
+		for (int row = 0; row < rows; row++)
+			for (int column = 0; column < columns; column++)
 				matrix.values[row][column] = input.readFloat();
-			}
-		}
 		return matrix;
 	}
 
@@ -446,26 +536,16 @@ public class NeuralNetwork {
 
 	private static ActivationFunction readActivation(DataInputStream input) throws IOException {
 		switch (input.readByte()) {
-			case 1:
-				return new ReLU();
-			case 2:
-				return new Sigmoid();
-			case 3:
-				return new Tanh();
-			case 4:
-				return new SiLU();
-			case 5:
-				return new Swish();
-			case 6:
-				return new GELU();
-			case 7:
-				return new Softmax();
-			case 8:
-				return new ELU(input.readFloat());
-			case 9:
-				return new LeakyReLU(input.readFloat());
-			default:
-				throw new IOException("Unsupported activation function");
+			case 1: return new ReLU();
+			case 2: return new Sigmoid();
+			case 3: return new Tanh();
+			case 4: return new SiLU();
+			case 5: return new Swish();
+			case 6: return new GELU();
+			case 7: return new Softmax();
+			case 8: return new ELU(input.readFloat());
+			case 9: return new LeakyReLU(input.readFloat());
+			default: throw new IOException("Unsupported activation function");
 		}
 	}
 }

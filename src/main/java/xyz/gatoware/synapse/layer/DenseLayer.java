@@ -2,14 +2,16 @@ package xyz.gatoware.synapse.layer;
 
 import java.util.Arrays;
 
+import xyz.gatoware.synapse.Synapse;
 import xyz.gatoware.synapse.activation.ActivationFunction;
+import xyz.gatoware.synapse.activation.ReLU;
+import xyz.gatoware.synapse.backend.CudaBackend;
 import xyz.gatoware.synapse.matrix.Matrix;
 import xyz.gatoware.synapse.optimizer.Optimizer;
 import xyz.gatoware.synapse.optimizer.SGD;
 
 /** A fully connected neural network layer. */
 public class DenseLayer implements Layer {
-
 	private Matrix weights;
 	private Matrix biases;
 	private ActivationFunction activationFunction;
@@ -23,98 +25,183 @@ public class DenseLayer implements Layer {
 	private float[] outputGradientValues;
 	private float[] weightedGradient;
 	private float[] inputGradientValues;
+	private boolean lastForwardWasBatch;
+	private boolean lastCudaResident;
+	private Matrix lastBatchInput;
+	private Matrix lastBatchWeighted;
+	private Matrix lastBatchOutput;
 
-	/** Creates a dense layer with randomly initialized weights.
-	 * @param inputSize the amount of inputs
-	 * @param outputSize the amount of outputs
-	 * @param activationFunction the activation function
-	 */
 	public DenseLayer(int inputSize, int outputSize, ActivationFunction activationFunction) {
 		this.activationFunction = activationFunction;
 		this.weights = new Matrix(outputSize, inputSize);
 		this.biases = new Matrix(outputSize, 1);
-
 		float scale = (float) (1.0 / Math.sqrt(inputSize));
-		for (int i = 0; i < outputSize; i++) {
-			for (int j = 0; j < inputSize; j++) {
+		for (int i = 0; i < outputSize; i++)
+			for (int j = 0; j < inputSize; j++)
 				this.weights.values[i][j] = (float) ((Math.random() * 2 - 1) * scale);
-			}
-		}
 	}
 
-	/** Creates a dense layer from weights, biases, and an activation function.
-	 * @param weights the layer weights
-	 * @param biases the layer biases
-	 * @param activationFunction the activation function
-	 */
 	public DenseLayer(Matrix weights, Matrix biases, ActivationFunction activationFunction) {
-		if (weights.rows() != biases.rows() || biases.columns() != 1) {
+		if (weights.rows() != biases.rows() || biases.columns() != 1)
 			throw new IllegalArgumentException("Dense layer biases must have dimensions " + weights.rows() + " x 1");
-		}
-
 		this.weights = weights;
 		this.biases = biases;
 		this.activationFunction = activationFunction;
 	}
 
 	@Override
-	/** Runs the input through the dense layer.
-	 * @param input the layer input
-	 * @return the layer output
-	 */
 	public Matrix forward(Matrix input) {
-		if (input.rows() != weights.columns() || input.columns() != 1) {
-			throw new IllegalArgumentException("Dense layer input must have dimensions " + weights.columns() + " x 1");
-		}
+		if (input.rows() != weights.columns() || input.columns() <= 0)
+			throw new IllegalArgumentException("Dense layer input must have " + weights.columns() + " rows");
 
 		int inputSize = weights.columns();
 		int outputSize = weights.rows();
-		ensureTrainingBuffers(inputSize, outputSize);
+		int batchSize = input.columns();
+		float[][] product = Synapse.backend().multiply(weights.values, input.values, outputSize, inputSize, batchSize);
+		lastCudaResident = false;
 
+		boolean cudaMaterialized = Synapse.backend() instanceof CudaBackend;
+		if (cudaMaterialized)
+			((CudaBackend) Synapse.backend()).materialize(biases);
+		if (batchSize > 1 || cudaMaterialized) {
+			lastForwardWasBatch = true;
+			lastBatchInput = input;
+			lastBatchWeighted = new Matrix(outputSize, batchSize);
+			lastBatchOutput = new Matrix(outputSize, batchSize);
+			float[] weighted = new float[outputSize];
+			float[] activated = new float[outputSize];
+			for (int sample = 0; sample < batchSize; sample++) {
+				for (int neuron = 0; neuron < outputSize; neuron++) {
+					weighted[neuron] = product[neuron][sample] + biases.values[neuron][0];
+					lastBatchWeighted.values[neuron][sample] = weighted[neuron];
+				}
+				activationFunction.apply(weighted, activated);
+				for (int neuron = 0; neuron < outputSize; neuron++)
+					lastBatchOutput.values[neuron][sample] = activated[neuron];
+			}
+			return lastBatchOutput;
+		}
+
+		lastForwardWasBatch = false;
+		lastBatchInput = null;
+		lastBatchWeighted = null;
+		lastBatchOutput = null;
+		ensureTrainingBuffers(inputSize, outputSize);
+		lastInput.markDirty();
+		lastWeightedInput.markDirty();
+		lastOutput.markDirty();
 		for (int i = 0; i < inputSize; i++)
 			lastInput.values[i][0] = input.values[i][0];
-
 		for (int neuron = 0; neuron < outputSize; neuron++) {
-			float[] neuronWeights = weights.values[neuron];
-			float sum = biases.values[neuron][0];
-			for (int i = 0; i < inputSize; i++)
-				sum += neuronWeights[i] * input.values[i][0];
+			float sum = product[neuron][0] + biases.values[neuron][0];
 			lastWeightedInput.values[neuron][0] = sum;
 			weightedInputValues[neuron] = sum;
 		}
-
 		activationFunction.apply(weightedInputValues, outputValues);
 		for (int neuron = 0; neuron < outputSize; neuron++)
 			lastOutput.values[neuron][0] = outputValues[neuron];
 		return lastOutput.copy();
 	}
 
+	public boolean canForwardCudaResident() {
+		return activationFunction instanceof ReLU
+			&& Synapse.backend() instanceof CudaBackend cuda
+			&& cuda.supportsResidentRelu();
+	}
+
+	public Matrix forwardCudaResident(Matrix input) {
+		if (!(activationFunction instanceof ReLU))
+			throw new IllegalStateException("Resident CUDA forward currently supports ReLU layers only");
+		if (!(Synapse.backend() instanceof CudaBackend cuda) || !cuda.supportsResidentRelu())
+			return forward(input);
+		if (input.rows() != weights.columns() || input.columns() <= 0)
+			throw new IllegalArgumentException("Dense layer input must have " + weights.columns() + " rows");
+		Matrix result = cuda.denseReluResident(weights, biases, input);
+		lastForwardWasBatch = true;
+		lastCudaResident = true;
+		lastBatchInput = input;
+		lastBatchWeighted = null;
+		lastBatchOutput = result;
+		return result;
+	}
+
 	@Override
-	/** Updates the layer using backpropagation and stochastic gradient descent, then returns the input gradient.
-	 * @param outputGradient the gradient at the layer output
-	 * @param learningRate the training learning rate
-	 * @return the gradient at the layer input
-	 */
 	public Matrix backward(Matrix outputGradient, float learningRate) {
 		return backward(outputGradient, learningRate, new SGD());
 	}
 
 	@Override
-	/** Updates the layer using backpropagation and the given optimizer, then returns the input gradient.
-	 * @param outputGradient the gradient at the layer output
-	 * @param learningRate the training learning rate
-	 * @param optimizer the optimizer used to update weights and biases
-	 * @return the gradient at the layer input
-	 */
 	public Matrix backward(Matrix outputGradient, float learningRate, Optimizer optimizer) {
-		if (lastInput == null)
-			throw new IllegalStateException("Dense layer must run forward before backward");
-		if (outputGradient.rows() != weights.rows() || outputGradient.columns() != 1)
-			throw new IllegalArgumentException("Dense layer output gradient must have dimensions " + weights.rows() + " x 1");
 		if (!Float.isFinite(learningRate) || learningRate <= 0.0f)
 			throw new IllegalArgumentException("Learning rate must be positive and finite");
 		if (optimizer == null)
 			throw new IllegalArgumentException("Optimizer cannot be null");
+
+		if (Synapse.backend() instanceof CudaBackend cuda) {
+			if (lastCudaResident) {
+				if (lastBatchInput == null || lastBatchOutput == null)
+					throw new IllegalStateException("Dense layer must run forward before backward");
+				if (outputGradient.rows() != weights.rows() || outputGradient.columns() != lastBatchInput.columns())
+					throw new IllegalArgumentException("Dense layer output gradient dimensions do not match the last forward pass");
+				return cuda.denseReluBackwardUpdate(weights, biases, lastBatchInput, lastBatchOutput,
+					outputGradient, optimizer, learningRate);
+			}
+
+			if (lastForwardWasBatch) {
+				if (lastBatchInput == null || lastBatchWeighted == null || lastBatchOutput == null)
+					throw new IllegalStateException("Dense layer must run forward before backward");
+				int outputSize = weights.rows();
+				int batch = lastBatchInput.columns();
+				if (outputGradient.rows() != outputSize || outputGradient.columns() != batch)
+					throw new IllegalArgumentException("Dense layer output gradient dimensions do not match the last forward pass");
+
+				Matrix weightedGradients = activationBackwardBatch(outputGradient);
+				return cuda.denseBackwardUpdate(weights, biases, lastBatchInput, weightedGradients,
+					optimizer, learningRate);
+			}
+		}
+
+		if (lastForwardWasBatch) {
+			if (lastBatchInput == null || lastBatchWeighted == null || lastBatchOutput == null)
+				throw new IllegalStateException("Dense layer must run forward before backward");
+			int outputSize = weights.rows();
+			int inputSize = weights.columns();
+			int batch = lastBatchInput.columns();
+			if (outputGradient.rows() != outputSize || outputGradient.columns() != batch)
+				throw new IllegalArgumentException("Dense layer output gradient dimensions do not match the last forward pass");
+
+			Matrix weightedGradients = activationBackwardBatch(outputGradient);
+			Matrix inputGradient = new Matrix(inputSize, batch);
+			Matrix batchWeightGradients = new Matrix(outputSize, inputSize);
+			Matrix batchBiasGradients = new Matrix(outputSize, 1);
+			float scale = 1.0f / batch;
+
+			for (int neuron = 0; neuron < outputSize; neuron++) {
+				float biasSum = 0.0f;
+				for (int sample = 0; sample < batch; sample++) {
+					float gradient = weightedGradients.values[neuron][sample];
+					biasSum += gradient;
+					for (int input = 0; input < inputSize; input++) {
+						inputGradient.values[input][sample] += weights.values[neuron][input] * gradient;
+						batchWeightGradients.values[neuron][input] += gradient * lastBatchInput.values[input][sample];
+					}
+				}
+				batchBiasGradients.values[neuron][0] = biasSum * scale;
+				for (int input = 0; input < inputSize; input++)
+					batchWeightGradients.values[neuron][input] *= scale;
+			}
+
+			optimizer.update(weights, batchWeightGradients, learningRate);
+			optimizer.update(biases, batchBiasGradients, learningRate);
+			weights.markDirty();
+			biases.markDirty();
+			return inputGradient;
+		}
+
+		if (lastInput == null)
+			throw new IllegalStateException("Dense layer must run forward before backward");
+		if (outputGradient.rows() != weights.rows() || outputGradient.columns() != 1)
+			throw new IllegalArgumentException("Dense layer output gradient must have dimensions " + weights.rows() + " x 1");
 
 		for (int i = 0; i < weights.rows(); i++) {
 			weightedInputValues[i] = lastWeightedInput.values[i][0];
@@ -122,7 +209,6 @@ public class DenseLayer implements Layer {
 			outputGradientValues[i] = outputGradient.values[i][0];
 		}
 		activationFunction.backward(weightedInputValues, outputValues, outputGradientValues, weightedGradient);
-
 		Matrix inputGradient = new Matrix(weights.columns(), 1);
 		Arrays.fill(inputGradientValues, 0.0f);
 		for (int neuron = 0; neuron < weights.rows(); neuron++) {
@@ -136,10 +222,59 @@ public class DenseLayer implements Layer {
 		}
 		for (int input = 0; input < weights.columns(); input++)
 			inputGradient.values[input][0] = inputGradientValues[input];
-
 		optimizer.update(weights, weightGradients, learningRate);
 		optimizer.update(biases, biasGradients, learningRate);
+		weights.markDirty();
+		biases.markDirty();
 		return inputGradient;
+	}
+
+	private Matrix activationBackwardBatch(Matrix outputGradient) {
+		int outputSize = weights.rows();
+		int batch = lastBatchInput.columns();
+		Matrix weightedGradients = new Matrix(outputSize, batch);
+		float[] weighted = new float[outputSize];
+		float[] output = new float[outputSize];
+		float[] upstream = new float[outputSize];
+		float[] result = new float[outputSize];
+		for (int sample = 0; sample < batch; sample++) {
+			for (int neuron = 0; neuron < outputSize; neuron++) {
+				weighted[neuron] = lastBatchWeighted.values[neuron][sample];
+				output[neuron] = lastBatchOutput.values[neuron][sample];
+				upstream[neuron] = outputGradient.values[neuron][sample];
+			}
+			activationFunction.backward(weighted, output, upstream, result);
+			for (int neuron = 0; neuron < outputSize; neuron++)
+				weightedGradients.values[neuron][sample] = result[neuron];
+		}
+		return weightedGradients;
+	}
+
+	/**
+	 * CUDA fast path for callers that already have the gradient with respect to
+	 * this layer's pre-activation logits. This is especially useful for the
+	 * mathematically fused Softmax + cross-entropy derivative (probabilities - one-hot),
+	 * avoiding the full Softmax Jacobian on the CPU.
+	 */
+	public Matrix backwardCudaPreactivated(Matrix weightedGradient, float learningRate, Optimizer optimizer) {
+		if (!(Synapse.backend() instanceof CudaBackend cuda))
+			throw new IllegalStateException("Pre-activated CUDA backward requires the CUDA backend");
+		if (lastBatchInput == null)
+			throw new IllegalStateException("Dense layer must run forward before backward");
+		if (weightedGradient.rows() != weights.rows() || weightedGradient.columns() != lastBatchInput.columns())
+			throw new IllegalArgumentException("Dense layer gradient dimensions do not match the last forward pass");
+		if (!Float.isFinite(learningRate) || learningRate <= 0.0f)
+			throw new IllegalArgumentException("Learning rate must be positive and finite");
+		if (optimizer == null)
+			throw new IllegalArgumentException("Optimizer cannot be null");
+		return cuda.denseBackwardUpdate(weights, biases, lastBatchInput, weightedGradient, optimizer, learningRate);
+	}
+
+	public void materializeParameters() {
+		if (Synapse.backend() instanceof CudaBackend cuda) {
+			cuda.materialize(weights);
+			cuda.materialize(biases);
+		}
 	}
 
 	private void ensureTrainingBuffers(int inputSize, int outputSize) {
@@ -159,25 +294,7 @@ public class DenseLayer implements Layer {
 		}
 	}
 
-	/** Returns the layer weights.
-	 * @return the layer weights
-	 */
-	public Matrix getWeights() {
-		return weights;
-	}
-
-	/** Returns the layer biases.
-	 * @return the layer biases
-	 */
-	public Matrix getBiases() {
-		return biases;
-	}
-
-	/** Returns the layer activation function.
-	 * @return the layer activation function
-	 */
-	public ActivationFunction getActivationFunction() {
-		return activationFunction;
-	}
-
+	public Matrix getWeights() { return weights; }
+	public Matrix getBiases() { return biases; }
+	public ActivationFunction getActivationFunction() { return activationFunction; }
 }

@@ -1,4 +1,4 @@
-# Synapse 0.1.1
+# Synapse 0.1.2
 
 Synapse is a lightweight Neural Network library in both C and Java, this repo containing the Java version.
 
@@ -78,6 +78,13 @@ NeuralNetwork network = new NeuralNetwork(new Layer[] {
 network.fit(dataset, 10, 0.001f);
 ```
 
+A batch size can optionally be passed to `fit`:
+
+```java
+network.fit(dataset, 10, 0.001f, 64); // 64 being the batch size
+network.fit(dataset, 10, 0.001f, new Adam(), 64);
+```
+
 For simple fully-connected networks, Synapse can also construct the layers automatically by passing the input size, hidden layer size, amount of hidden layers, and output size:
 
 ```java
@@ -140,6 +147,22 @@ The most recent average loss is also available after training with `getLastLoss(
 
 ```java
 System.out.println("Final loss: " + network.getLastLoss());
+```
+
+## CUDA
+CUDA acceleration is optional; CPU remains the default.
+
+```java
+Synapse.useDevice(Devices.CUDA);
+```
+
+Synapse 0.1.2 supports CUDA **12.0 through 12.9**.
+
+If you directly modify `Matrix.values` after that matrix has been used on CUDA, call `matrix.markDirty()` before using it on CUDA again. For example,
+
+```java
+matrix.values[0][0] = 5;
+matrix.markDirty();
 ```
 
 ## Saving models

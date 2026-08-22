@@ -3,6 +3,8 @@ package xyz.gatoware.synapse.optimizer;
 import java.util.IdentityHashMap;
 import java.util.Map;
 
+import xyz.gatoware.synapse.Synapse;
+import xyz.gatoware.synapse.backend.CudaBackend;
 import xyz.gatoware.synapse.matrix.Matrix;
 
 /** AdaGrad optimizer with per-parameter adaptive learning rates. */
@@ -10,31 +12,24 @@ public class AdaGrad implements Optimizer {
 	private final float epsilon;
 	private final Map<Matrix, Matrix> squaredGradients = new IdentityHashMap<>();
 
-	/** Creates an AdaGrad optimizer using epsilon 1e-7. */
-	public AdaGrad() {
-		this(1e-7f);
-	}
-
-	/** Creates an AdaGrad optimizer.
-	 * @param epsilon a small positive value used for numerical stability
-	 */
+	public AdaGrad() { this(1e-7f); }
 	public AdaGrad(float epsilon) {
 		if (!Float.isFinite(epsilon) || epsilon <= 0.0f)
 			throw new IllegalArgumentException("Epsilon must be positive and finite");
 		this.epsilon = epsilon;
 	}
 
+	public float getEpsilon() { return epsilon; }
+
 	@Override
 	public void update(Matrix parameters, Matrix gradients, float learningRate) {
 		validate(parameters, gradients, learningRate);
-		Matrix accumulator = squaredGradients.computeIfAbsent(parameters,
-				parameter -> new Matrix(parameter.rows(), parameter.columns()));
+		Matrix accumulator = squaredGradients.computeIfAbsent(parameters, parameter -> new Matrix(parameter.rows(), parameter.columns()));
 		for (int row = 0; row < parameters.rows(); row++) {
 			for (int column = 0; column < parameters.columns(); column++) {
 				float gradient = gradients.values[row][column];
 				accumulator.values[row][column] += gradient * gradient;
-				parameters.values[row][column] -= learningRate * gradient
-						/ ((float) Math.sqrt(accumulator.values[row][column]) + epsilon);
+				parameters.values[row][column] -= learningRate * gradient / ((float) Math.sqrt(accumulator.values[row][column]) + epsilon);
 			}
 		}
 	}
@@ -42,6 +37,8 @@ public class AdaGrad implements Optimizer {
 	@Override
 	public void reset() {
 		squaredGradients.clear();
+		if (Synapse.backend() instanceof CudaBackend cuda)
+			cuda.resetOptimizer(this);
 	}
 
 	private static void validate(Matrix parameters, Matrix gradients, float learningRate) {

@@ -1,0 +1,71 @@
+package xyz.gatoware.synapse;
+
+import xyz.gatoware.synapse.backend.Backend;
+import xyz.gatoware.synapse.backend.CpuBackend;
+import xyz.gatoware.synapse.backend.CudaBackend;
+
+/** Global Synapse runtime configuration. */
+public final class Synapse {
+	private static volatile Devices device = Devices.CPU;
+	private static volatile Backend backend = CpuBackend.INSTANCE;
+	private static volatile int cudaBatchSize = 32;
+
+	private Synapse() {
+	}
+
+	/** Selects the compute device used by supported Synapse operations.
+	 * CPU is used by default when this method is never called.
+	 * @param newDevice the device to use
+	 * @throws IllegalArgumentException if newDevice is null
+	 * @throws IllegalStateException if CUDA is requested but unavailable
+	 */
+	public static synchronized void useDevice(Devices newDevice) {
+		if (newDevice == null)
+			throw new IllegalArgumentException("Device cannot be null");
+		if (newDevice == device)
+			return;
+
+		Backend nextBackend = switch (newDevice) {
+			case CPU -> CpuBackend.INSTANCE;
+			case CUDA -> new CudaBackend();
+		};
+
+		Backend previousBackend = backend;
+		backend = nextBackend;
+		device = newDevice;
+		if (previousBackend != CpuBackend.INSTANCE)
+			previousBackend.close();
+	}
+
+	/** Returns the currently selected compute device. */
+	public static Devices getDevice() {
+		return device;
+	}
+
+	/** Checks whether a device is available on this system. */
+	public static boolean isDeviceAvailable(Devices requestedDevice) {
+		if (requestedDevice == null)
+			return false;
+		return switch (requestedDevice) {
+			case CPU -> true;
+			case CUDA -> CudaBackend.isAvailable();
+		};
+	}
+
+	/** Sets the CUDA training mini-batch size. Default is 32. */
+	public static void setCudaBatchSize(int batchSize) {
+		if (batchSize <= 0)
+			throw new IllegalArgumentException("CUDA batch size must be positive");
+		cudaBatchSize = batchSize;
+	}
+
+	/** Returns the configured CUDA training mini-batch size. */
+	public static int getCudaBatchSize() {
+		return cudaBatchSize;
+	}
+
+	/** Returns the active internal compute backend. */
+	public static Backend backend() {
+		return backend;
+	}
+}
