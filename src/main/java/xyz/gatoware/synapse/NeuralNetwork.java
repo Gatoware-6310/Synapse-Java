@@ -45,33 +45,22 @@ public class NeuralNetwork {
 		// here for compatibility
 	}
 
-	/** Creates a neural network from a list of layers.
-	 * @param layerList the layers in the network
-	 */
+	/** Creates a neural network from a list of layers. */
 	public NeuralNetwork(Layer[] layerList) {
-		for (Layer l : layerList) {
+		for (Layer l : layerList)
 			addLayer(l);
-		}
 	}
 
-	/** An easier way to instantiate a neural network - creates a neural network with the specified amount of inputs, layers, and outputs.
-	 * @param inputs the amount of inputs taken
-	 * @param layerSize the amount of neurons per layer
-	 * @param layers the amount of layers
-	 * @param outputs the amount of outputs
-	 */
+	/** An easier way to instantiate a neural network. */
 	public NeuralNetwork(int inputs, int layerSize, int layers, int outputs) {
 		if (inputs <= 0)
-		throw new IllegalArgumentException("inputs must be greater than 0");
-
+			throw new IllegalArgumentException("inputs must be greater than 0");
 		if (layerSize <= 0)
-		throw new IllegalArgumentException("layerSize must be greater than 0");
-
+			throw new IllegalArgumentException("layerSize must be greater than 0");
 		if (layers < 0)
-		throw new IllegalArgumentException("layers cannot be negative");
-
+			throw new IllegalArgumentException("layers cannot be negative");
 		if (outputs <= 0)
-		throw new IllegalArgumentException("outputs must be greater than 0");
+			throw new IllegalArgumentException("outputs must be greater than 0");
 
 		if (layers == 0) {
 			addLayer(new DenseLayer(inputs, outputs, new Softmax()));
@@ -79,74 +68,55 @@ public class NeuralNetwork {
 		}
 
 		addLayer(new DenseLayer(inputs, layerSize, new ReLU()));
-
 		for (int i = 1; i < layers; i++)
 			addLayer(new DenseLayer(layerSize, layerSize, new ReLU()));
-
 		addLayer(new DenseLayer(layerSize, outputs, new Softmax()));
 	}
 
-	/** Adds a layer to the neural network.
-	 * @param layer the layer to add
-	 */
+	/** Adds a layer to the neural network. */
 	public void addLayer(Layer layer) {
 		layers.add(layer);
 	}
 
-	/** Runs the input through every layer and returns the output.
-	 * @param input the network input
-	 * @return the network output
+	/** Runs the input through every layer and returns the output. CUDA inference
+	 * keeps eligible hidden ReLU dense layers resident in VRAM and materializes
+	 * only when a non-resident/final layer needs host values.
 	 */
 	public Matrix forward(Matrix input) {
 		Matrix output = input;
-		for (Layer layer : layers)
-			output = layer.forward(output);
-
+		for (int i = 0; i < layers.size(); i++) {
+			Layer layer = layers.get(i);
+			boolean hiddenLayer = i < layers.size() - 1;
+			if (hiddenLayer && layer instanceof DenseLayer denseLayer && denseLayer.canForwardCudaResident())
+				output = denseLayer.forwardCudaResident(output);
+			else
+				output = layer.forward(output);
+		}
 		return output;
 	}
 
-	/** Trains the network on a dataset using the given loss function and Adam optimizer.
-	 * @param dataset the dataset to train on
-	 * @param lossFunction the loss function to use
-	 * @param epochs the amount of training epochs
-	 * @param learningRate the training learning rate
-	 */
+	/** Always materializes every layer and records training state for backward. */
+	private Matrix forwardTraining(Matrix input) {
+		Matrix output = input;
+		for (Layer layer : layers)
+			output = layer.forward(output);
+		return output;
+	}
+
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate) {
 		fit(dataset, lossFunction, epochs, learningRate, new Adam(), false);
 	}
 
-	/** Trains the network on a dataset using the given loss function and optimizer.
-	 * @param dataset the dataset to train on
-	 * @param lossFunction the loss function to use
-	 * @param epochs the amount of training epochs
-	 * @param learningRate the training learning rate
-	 * @param optimizer the optimizer to use
-	 */
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
 			final Optimizer optimizer) {
 		fit(dataset, lossFunction, epochs, learningRate, optimizer, false);
 	}
 
-	/** Trains the network on a dataset using the given loss function and Adam optimizer, optionally logging the average loss and classification accuracy after every epoch.
-	 * @param dataset the dataset to train on
-	 * @param lossFunction the loss function to use
-	 * @param epochs the amount of training epochs
-	 * @param learningRate the training learning rate
-	 * @param logging whether to log after every epoch
-	 */
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
 			final boolean logging) {
 		fit(dataset, lossFunction, epochs, learningRate, new Adam(), logging);
 	}
 
-	/** Trains the network on a dataset using the given loss function and optimizer, optionally logging the average loss and classification accuracy after every epoch.
-	 * @param dataset the dataset to train on
-	 * @param lossFunction the loss function to use
-	 * @param epochs the amount of training epochs
-	 * @param learningRate the training learning rate
-	 * @param optimizer the optimizer to use
-	 * @param logging whether to log after every epoch
-	 */
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
 			final Optimizer optimizer, final boolean logging) {
 		if (dataset == null)
@@ -174,7 +144,7 @@ public class NeuralNetwork {
 			float totalLoss = 0.0f;
 
 			for (int index : order) {
-				Matrix output = forward(dataset.getInput(index));
+				Matrix output = forwardTraining(dataset.getInput(index));
 				Matrix predicted = rowVector(output);
 				Matrix actual = rowVector(dataset.getTarget(index));
 				totalLoss += lossFunction.calculate(predicted, actual);
@@ -185,7 +155,6 @@ public class NeuralNetwork {
 			}
 
 			lastLoss = totalLoss / dataset.size();
-
 			if (logging) {
 				System.out.printf("Epoch %d loss: %.6f accuracy: %.2f%%%n", epoch + 1, lastLoss,
 					accuracy(dataset) * 100.0f);
@@ -193,66 +162,36 @@ public class NeuralNetwork {
 		}
 	}
 
-	/** Trains the network using SparseCategoricalCrossEntropy and Adam by default.
-	 * @param dataset the dataset to train on
-	 * @param epochs the amount of training epochs
-	 * @param learningRate the training learning rate
-	 */
 	public void fit(final Dataset dataset, final int epochs, final float learningRate) {
 		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, new Adam(), false);
 	}
 
-	/** Trains the network using SparseCategoricalCrossEntropy and the given optimizer.
-	 * @param dataset the dataset to train on
-	 * @param epochs the amount of training epochs
-	 * @param learningRate the training learning rate
-	 * @param optimizer the optimizer to use
-	 */
 	public void fit(final Dataset dataset, final int epochs, final float learningRate, final Optimizer optimizer) {
 		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, optimizer, false);
 	}
 
-	/** Trains the network using SparseCategoricalCrossEntropy and Adam by default, optionally logging after every epoch.
-	 * @param dataset the dataset to train on
-	 * @param epochs the amount of training epochs
-	 * @param learningRate the training learning rate
-	 * @param logging whether to log after every epoch
-	 */
 	public void fit(final Dataset dataset, final int epochs, final float learningRate, final boolean logging) {
 		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, new Adam(), logging);
 	}
 
-	/** Trains the network using SparseCategoricalCrossEntropy and the given optimizer, optionally logging after every epoch.
-	 * @param dataset the dataset to train on
-	 * @param epochs the amount of training epochs
-	 * @param learningRate the training learning rate
-	 * @param optimizer the optimizer to use
-	 * @param logging whether to log after every epoch
-	 */
 	public void fit(final Dataset dataset, final int epochs, final float learningRate, final Optimizer optimizer,
 			final boolean logging) {
 		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, optimizer, logging);
 	}
 
-	/** Returns the most recent average loss after training.
-	 * @return the most recent average loss
-	 */
+	/** Returns the most recent average loss after training. */
 	public float getLastLoss() {
 		return lastLoss;
 	}
 
-	/** Returns the index of the largest value in the network output.
-	 * @param input the network input
-	 * @return the index of the largest output value
-	 */
+	/** Returns the index of the largest value in the network output. */
 	public int predict(Matrix input) {
 		Matrix output = forward(input);
-		if (output.rows() == 0 || output.columns() == 0 || (output.rows() != 1 && output.columns() != 1)) {
+		if (output.rows() == 0 || output.columns() == 0 || (output.rows() != 1 && output.columns() != 1))
 			throw new IllegalStateException("Network output must be a non-empty vector");
-		}
 
 		int prediction = 0;
-		float highest = output.rows() == 1 ? output.values[0][0] : output.values[0][0];
+		float highest = output.values[0][0];
 		int length = Math.max(output.rows(), output.columns());
 		for (int i = 1; i < length; i++) {
 			float value = output.rows() == 1 ? output.values[0][i] : output.values[i][0];
@@ -261,14 +200,10 @@ public class NeuralNetwork {
 				prediction = i;
 			}
 		}
-
 		return prediction;
 	}
 
-	/** Returns the fraction of dataset samples classified correctly.
-	 * @param dataset the dataset to evaluate
-	 * @return the fraction classified correctly
-	 */
+	/** Returns the fraction of dataset samples classified correctly. */
 	public float accuracy(Dataset dataset) {
 		if (dataset == null)
 			throw new IllegalArgumentException("Dataset cannot be null");
@@ -281,7 +216,6 @@ public class NeuralNetwork {
 			if (predict(dataset.getInput(i)) == target)
 				correct++;
 		}
-
 		return (float) correct / dataset.size();
 	}
 
@@ -290,7 +224,6 @@ public class NeuralNetwork {
 			return vector.copy();
 		if (vector.columns() != 1)
 			throw new IllegalArgumentException("Expected a vector");
-
 		Matrix result = new Matrix(1, vector.rows());
 		for (int i = 0; i < vector.rows(); i++)
 			result.values[0][i] = vector.values[i][0];
@@ -302,7 +235,6 @@ public class NeuralNetwork {
 			return vector.copy();
 		if (vector.rows() != 1)
 			throw new IllegalArgumentException("Expected a vector");
-
 		Matrix result = new Matrix(vector.columns(), 1);
 		for (int i = 0; i < vector.columns(); i++)
 			result.values[i][0] = vector.values[0][i];
@@ -318,29 +250,20 @@ public class NeuralNetwork {
 		}
 	}
 
-	/** Saves the model to a file.
-	 * @param filename the file to save to
-	 * @throws IOException if the model cannot be saved
-	 */
+	/** Saves the model to a file. */
 	public void save(String filename) throws IOException {
 		save(Path.of(filename));
 	}
 
-	/** Saves the model to a path.
-	 * @param path the path to save to
-	 * @throws IOException if the model cannot be saved
-	 */
+	/** Saves the model to a path. */
 	public void save(Path path) throws IOException {
 		try (DataOutputStream output = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(path)))) {
 			output.writeInt(FILE_MAGIC);
 			output.writeInt(FILE_VERSION);
 			output.writeInt(layers.size());
-
 			for (Layer layer : layers) {
-				if (!(layer instanceof DenseLayer)) {
+				if (!(layer instanceof DenseLayer))
 					throw new IOException("Only DenseLayer instances can be saved");
-				}
-
 				DenseLayer denseLayer = (DenseLayer) layer;
 				writeMatrix(output, denseLayer.getWeights());
 				writeMatrix(output, denseLayer.getBiases());
@@ -349,44 +272,31 @@ public class NeuralNetwork {
 		}
 	}
 
-	/** Loads a model from a file.
-	 * @param filename the file to load
-	 * @return the loaded neural network
-	 * @throws IOException if the model cannot be loaded
-	 */
+	/** Loads a model from a file. */
 	public static NeuralNetwork load(String filename) throws IOException {
 		return load(Path.of(filename));
 	}
 
-	/** Loads a model from a path.
-	 * @param path the path to load
-	 * @return the loaded neural network
-	 * @throws IOException if the model cannot be loaded
-	 */
+	/** Loads a model from a path. */
 	public static NeuralNetwork load(Path path) throws IOException {
 		try (DataInputStream input = new DataInputStream(new BufferedInputStream(Files.newInputStream(path)))) {
-			if (input.readInt() != FILE_MAGIC) {
+			if (input.readInt() != FILE_MAGIC)
 				throw new IOException("Not a Synapse neural network file");
-			}
-			if (input.readInt() != FILE_VERSION) {
+			if (input.readInt() != FILE_VERSION)
 				throw new IOException("Unsupported Synapse neural network file version");
-			}
 
 			int layerCount = input.readInt();
-			if (layerCount < 0 || layerCount > MAX_LAYERS) {
+			if (layerCount < 0 || layerCount > MAX_LAYERS)
 				throw new IOException("Invalid layer count");
-			}
 
 			NeuralNetwork network = new NeuralNetwork();
 			for (int i = 0; i < layerCount; i++) {
 				Matrix weights = readMatrix(input);
 				Matrix biases = readMatrix(input);
-				if (weights.rows() != biases.rows() || biases.columns() != 1) {
+				if (weights.rows() != biases.rows() || biases.columns() != 1)
 					throw new IOException("Invalid dense layer dimensions");
-				}
 				network.addLayer(new DenseLayer(weights, biases, readActivation(input)));
 			}
-
 			return network;
 		}
 	}
@@ -394,27 +304,22 @@ public class NeuralNetwork {
 	private static void writeMatrix(DataOutputStream output, Matrix matrix) throws IOException {
 		output.writeInt(matrix.rows());
 		output.writeInt(matrix.columns());
-		for (int row = 0; row < matrix.rows(); row++) {
-			for (int column = 0; column < matrix.columns(); column++) {
+		for (int row = 0; row < matrix.rows(); row++)
+			for (int column = 0; column < matrix.columns(); column++)
 				output.writeFloat(matrix.values[row][column]);
-			}
-		}
 	}
 
 	private static Matrix readMatrix(DataInputStream input) throws IOException {
 		int rows = input.readInt();
 		int columns = input.readInt();
 		if (rows <= 0 || columns <= 0 || rows > MAX_MATRIX_DIMENSION || columns > MAX_MATRIX_DIMENSION
-				|| (long) rows * columns > MAX_MATRIX_DIMENSION) {
+				|| (long) rows * columns > MAX_MATRIX_DIMENSION)
 			throw new IOException("Invalid matrix dimensions");
-		}
 
 		Matrix matrix = new Matrix(rows, columns);
-		for (int row = 0; row < rows; row++) {
-			for (int column = 0; column < columns; column++) {
+		for (int row = 0; row < rows; row++)
+			for (int column = 0; column < columns; column++)
 				matrix.values[row][column] = input.readFloat();
-			}
-		}
 		return matrix;
 	}
 
