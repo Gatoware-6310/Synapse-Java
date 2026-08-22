@@ -1,6 +1,6 @@
-# Experimental CUDA backend
+# CUDA backend
 
-This branch is a proof-of-concept CUDA backend for Synapse while keeping `Matrix` as the public numeric type.
+Synapse includes an optional CUDA backend while keeping `Matrix` as the public numeric type.
 
 ## User API
 
@@ -31,11 +31,14 @@ Availability can be checked with:
 Synapse.isDeviceAvailable(Devices.CUDA);
 ```
 
-CUDA training batch size defaults to 32 and can be tuned explicitly:
+CUDA training uses mini-batches. The default is 32, and an explicit batch size can be supplied per `fit(...)` call:
 
 ```java
-Synapse.setCudaBatchSize(64);
+network.fit(dataset, 10, 0.001f, 64);
+network.fit(dataset, 10, 0.001f, new Adam(), 64);
 ```
+
+A process-wide default can still be changed with `Synapse.setCudaBatchSize(...)`, but the per-call `fit(...)` overload is preferred when a specific training run needs a different batch size.
 
 ## CUDA execution
 
@@ -49,7 +52,7 @@ For `NeuralNetwork.forward`, eligible hidden `DenseLayer + ReLU` stages use a GP
 
 When CUDA is selected, `NeuralNetwork.fit()` uses mini-batches for compatible dense networks.
 
-The standard `Dense/ReLU/.../Softmax + SparseCategoricalCrossEntropy` training path now keeps essentially all expensive work on the GPU:
+The standard `Dense/ReLU/.../Softmax + SparseCategoricalCrossEntropy` training path keeps essentially all expensive work on the GPU:
 
 - hidden Dense + ReLU forward passes stay resident in VRAM
 - ReLU derivatives run in a CUDA kernel
@@ -60,14 +63,14 @@ The standard `Dense/ReLU/.../Softmax + SparseCategoricalCrossEntropy` training p
 - Adam/Momentum/AdaGrad/RMSProp state remains resident in VRAM
 - updated weights and biases remain device-authoritative between batches
 - final Dense + bias + numerically stable Softmax + sparse cross-entropy derivative is fused on CUDA
-- the fused Softmax/cross-entropy path uses the exact `probabilities - one-hot` logit derivative and does not materialize probabilities on the CPU
-- only the tiny per-batch loss values are copied back for `lastLoss`/logging
+- the fused Softmax/cross-entropy path uses the `probabilities - one-hot` logit derivative and does not materialize probabilities on the CPU
+- only tiny per-batch loss values are copied back for `lastLoss`/logging
 
-Custom loss functions or unsupported final activations still use the compatibility path that materializes the final boundary while keeping hidden-layer CUDA acceleration.
+Custom loss functions or unsupported final activations use the compatibility path that materializes the final boundary while keeping hidden-layer CUDA acceleration where supported.
 
 GPU-updated parameters are synchronized back into public `Matrix.values` before `fit()` returns, before model saving, and when the CUDA backend is closed.
 
-CUDA mini-batching is only selected when the network is made of dense layers and every hidden layer can use the resident ReLU path. Unsupported/custom network structures keep the existing CPU training behavior.
+CUDA mini-batching is selected only when the network is made of dense layers and every hidden layer can use the resident ReLU path. Unsupported/custom network structures keep the existing CPU training behavior.
 
 ## GPU memory/cache optimizations
 
@@ -104,13 +107,15 @@ A full `NeuralNetwork.forward(batch)` can also process batched matrices. Hidden 
 - CUDA/cuBLAS compatible with JCuda 12.6
 - CUDA NVRTC library for resident fused kernels and CUDA training
 
-On the current test setup, CUDA 12.9 is installed separately and Synapse is launched with its `lib64` directory in `LD_LIBRARY_PATH`.
-
 ## Build and test
 
 ```bash
-git switch cuda
-git pull
+./gradlew clean test
+```
+
+When CUDA libraries are installed outside the system linker path, expose them before running, for example:
+
+```bash
 LD_LIBRARY_PATH="$HOME/.local/cuda-12.9/lib64:$LD_LIBRARY_PATH" ./gradlew clean test
 ```
 
@@ -130,7 +135,7 @@ Build normal artifacts with:
 ./gradlew build
 ```
 
-or the experimental bundled runtime jar with:
+or the bundled runtime jar with:
 
 ```bash
 ./gradlew fatJar
