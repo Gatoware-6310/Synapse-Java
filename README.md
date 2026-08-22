@@ -165,6 +165,8 @@ matrix.values[0][0] = 5;
 matrix.markDirty();
 ```
 
+To setup CUDA on Linux/Windows, see the setup [here](CUDA.md).
+
 ## Saving models
 Saving a model and loading it again is straightforward. For example:
 
