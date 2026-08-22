@@ -12,15 +12,49 @@ plugins {
 }
 
 group = 'xyz.gatoware'
-version = '0.1.1' 
+version = '0.1.1-cuda'
 
 repositories {
     // Use Maven Central for resolving dependencies.
     mavenCentral()
 }
 
+def getJcudaOs() {
+    String osName = System.getProperty('os.name').toLowerCase(Locale.ENGLISH)
+    if (osName.startsWith('windows')) return 'windows'
+    if (osName.startsWith('linux')) return 'linux'
+    if (osName.startsWith('mac os')) return 'apple'
+    return null
+}
+
+def getJcudaArch() {
+    String osArch = System.getProperty('os.arch').toLowerCase(Locale.ENGLISH)
+    if (osArch == 'amd64' || osArch.startsWith('x86_64')) return 'x86_64'
+    if (osArch == 'i386' || osArch == 'x86' || osArch == 'i686') return 'x86'
+    if (osArch == 'aarch64' || osArch.startsWith('arm64')) return 'arm64'
+    if (osArch.startsWith('arm')) return 'arm'
+    return null
+}
+
 dependencies {
-	// none yet!	
+    def jcudaVersion = '12.6.0'
+    def jcudaOs = getJcudaOs()
+    def jcudaArch = getJcudaArch()
+
+    // Java bindings. Native libraries are selected separately because Gradle does
+    // not process JCuda's Maven profiles for platform-specific classifiers.
+    implementation(group: 'org.jcuda', name: 'jcuda', version: jcudaVersion) {
+        transitive = false
+    }
+    implementation(group: 'org.jcuda', name: 'jcublas', version: jcudaVersion) {
+        transitive = false
+    }
+
+    if (jcudaOs != null && jcudaArch != null) {
+        def classifier = "${jcudaOs}-${jcudaArch}"
+        runtimeOnly group: 'org.jcuda', name: 'jcuda-natives', version: jcudaVersion, classifier: classifier
+        runtimeOnly group: 'org.jcuda', name: 'jcublas-natives', version: jcudaVersion, classifier: classifier
+    }
 }
 
 testing {
@@ -35,21 +69,34 @@ testing {
 
 // Apply a specific Java toolchain to ease working on different environments.
 java {
-	withSourcesJar()
-	withJavadocJar()
+    withSourcesJar()
+    withJavadocJar()
 
     toolchain {
         languageVersion = JavaLanguageVersion.of(21)
     }
 }
 
+// Experimental convenience artifact for manually testing Synapse without
+// separately placing JCuda jars on the runtime classpath.
+tasks.register('fatJar', Jar) {
+    archiveClassifier = 'all'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    dependsOn configurations.runtimeClasspath
+    from sourceSets.main.output
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA'
+}
+
 tasks.register('runMain', JavaExec) {
-		classpath = sourceSets.test.runtimeClasspath;
-		mainClass = 'Main'
+    classpath = sourceSets.test.runtimeClasspath;
+    mainClass = 'Main'
 }
 
 tasks.register('mnistClassify', JavaExec) {
-		dependsOn testClasses
-		classpath = sourceSets.test.runtimeClasspath
-		mainClass = 'MNISTClassify'
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'MNISTClassify'
 }
