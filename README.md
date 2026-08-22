@@ -149,7 +149,7 @@ CUDA acceleration is optional; CPU remains the default.
 Synapse.useDevice(Devices.CUDA);
 ```
 
-Synapse 0.1.2 supports CUDA **12.0 through 12.9**. CUDA 13 is not supported by the current JCuda 12.x backend.
+Synapse 0.1.2 supports CUDA **12.0 through 12.9**.
 
 A batch size can optionally be passed to `fit`:
 
