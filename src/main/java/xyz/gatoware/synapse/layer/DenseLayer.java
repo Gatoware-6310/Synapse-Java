@@ -61,9 +61,8 @@ public class DenseLayer implements Layer {
 		lastCudaResident = false;
 
 		boolean cudaMaterialized = Synapse.backend() instanceof CudaBackend;
-		if (cudaMaterialized) {
+		if (cudaMaterialized)
 			((CudaBackend) Synapse.backend()).materialize(biases);
-		}
 		if (batchSize > 1 || cudaMaterialized) {
 			lastForwardWasBatch = true;
 			lastBatchInput = input;
@@ -207,6 +206,26 @@ public class DenseLayer implements Layer {
 		weights.markDirty();
 		biases.markDirty();
 		return inputGradient;
+	}
+
+	/**
+	 * CUDA fast path for callers that already have the gradient with respect to
+	 * this layer's pre-activation logits. This is especially useful for the
+	 * mathematically fused Softmax + cross-entropy derivative (probabilities - one-hot),
+	 * avoiding the full Softmax Jacobian on the CPU.
+	 */
+	public Matrix backwardCudaPreactivated(Matrix weightedGradient, float learningRate, Optimizer optimizer) {
+		if (!(Synapse.backend() instanceof CudaBackend cuda))
+			throw new IllegalStateException("Pre-activated CUDA backward requires the CUDA backend");
+		if (lastBatchInput == null)
+			throw new IllegalStateException("Dense layer must run forward before backward");
+		if (weightedGradient.rows() != weights.rows() || weightedGradient.columns() != lastBatchInput.columns())
+			throw new IllegalArgumentException("Dense layer gradient dimensions do not match the last forward pass");
+		if (!Float.isFinite(learningRate) || learningRate <= 0.0f)
+			throw new IllegalArgumentException("Learning rate must be positive and finite");
+		if (optimizer == null)
+			throw new IllegalArgumentException("Optimizer cannot be null");
+		return cuda.denseBackwardUpdate(weights, biases, lastBatchInput, weightedGradient, optimizer, learningRate);
 	}
 
 	public void materializeParameters() {
