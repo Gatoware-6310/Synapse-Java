@@ -12,6 +12,14 @@ public interface Backend extends AutoCloseable {
 	 */
 	float[][] multiply(float[][] left, float[][] right, int rows, int shared, int columns);
 
+	/** Invalidates any backend-side cached representation of the given host matrix.
+	 * CPU backends do not need to do anything.
+	 * @param matrix host matrix values that were modified
+	 */
+	default void invalidate(float[][] matrix) {
+		// Most backends do not cache host matrices.
+	}
+
 	/** Releases backend resources. */
 	@Override
 	default void close() {
