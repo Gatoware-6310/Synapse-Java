@@ -101,8 +101,18 @@ public class NeuralNetwork {
 	}
 
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
+			final int batchSize) {
+		fit(dataset, lossFunction, epochs, learningRate, new Adam(), false, batchSize);
+	}
+
+	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
 			final Optimizer optimizer) {
 		fit(dataset, lossFunction, epochs, learningRate, optimizer, false);
+	}
+
+	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
+			final Optimizer optimizer, final int batchSize) {
+		fit(dataset, lossFunction, epochs, learningRate, optimizer, false, batchSize);
 	}
 
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
@@ -111,10 +121,27 @@ public class NeuralNetwork {
 	}
 
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
+			final boolean logging, final int batchSize) {
+		fit(dataset, lossFunction, epochs, learningRate, new Adam(), logging, batchSize);
+	}
+
+	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
 			final Optimizer optimizer, final boolean logging) {
 		validateTrainingArguments(dataset, lossFunction, epochs, learningRate, optimizer);
 		if (canUseCudaTraining()) {
-			fitCuda(dataset, lossFunction, epochs, learningRate, optimizer, logging);
+			fitCuda(dataset, lossFunction, epochs, learningRate, optimizer, logging, Synapse.getCudaBatchSize());
+			return;
+		}
+		fitCpu(dataset, lossFunction, epochs, learningRate, optimizer, logging);
+	}
+
+	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
+			final Optimizer optimizer, final boolean logging, final int batchSize) {
+		validateTrainingArguments(dataset, lossFunction, epochs, learningRate, optimizer);
+		if (batchSize <= 0)
+			throw new IllegalArgumentException("Batch size must be positive");
+		if (canUseCudaTraining()) {
+			fitCuda(dataset, lossFunction, epochs, learningRate, optimizer, logging, batchSize);
 			return;
 		}
 		fitCpu(dataset, lossFunction, epochs, learningRate, optimizer, logging);
@@ -149,11 +176,10 @@ public class NeuralNetwork {
 	 * update are fused into the CUDA backend without materializing probabilities.
 	 */
 	private void fitCuda(Dataset dataset, LossFunction lossFunction, int epochs, float learningRate,
-			Optimizer optimizer, boolean logging) {
+			Optimizer optimizer, boolean logging, int cudaBatchSize) {
 		int[] order = makeOrder(dataset.size());
 		Random random = new Random();
 		int featureCount = dataset.getInputs().columns();
-		int cudaBatchSize = Synapse.getCudaBatchSize();
 		int finalLayerIndex = layers.size() - 1;
 		boolean fusedSoftmaxCrossEntropy = lossFunction instanceof SparseCategoricalCrossEntropy
 			&& layers.get(finalLayerIndex) instanceof DenseLayer finalDense
@@ -283,17 +309,36 @@ public class NeuralNetwork {
 		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, new Adam(), false);
 	}
 
+	public void fit(final Dataset dataset, final int epochs, final float learningRate, final int batchSize) {
+		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, new Adam(), false, batchSize);
+	}
+
 	public void fit(final Dataset dataset, final int epochs, final float learningRate, final Optimizer optimizer) {
 		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, optimizer, false);
+	}
+
+	public void fit(final Dataset dataset, final int epochs, final float learningRate,
+			final Optimizer optimizer, final int batchSize) {
+		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, optimizer, false, batchSize);
 	}
 
 	public void fit(final Dataset dataset, final int epochs, final float learningRate, final boolean logging) {
 		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, new Adam(), logging);
 	}
 
+	public void fit(final Dataset dataset, final int epochs, final float learningRate,
+			final boolean logging, final int batchSize) {
+		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, new Adam(), logging, batchSize);
+	}
+
 	public void fit(final Dataset dataset, final int epochs, final float learningRate, final Optimizer optimizer,
 			final boolean logging) {
 		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, optimizer, logging);
+	}
+
+	public void fit(final Dataset dataset, final int epochs, final float learningRate, final Optimizer optimizer,
+			final boolean logging, final int batchSize) {
+		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, optimizer, logging, batchSize);
 	}
 
 	public float getLastLoss() {
