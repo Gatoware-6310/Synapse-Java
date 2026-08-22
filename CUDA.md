@@ -33,6 +33,8 @@ if (Synapse.isDeviceAvailable(Devices.CUDA)) {
 }
 ```
 
+`isDeviceAvailable(Devices.CUDA)` verifies the CUDA device/runtime and that cuBLAS can actually be initialized. A machine with a working NVIDIA driver but a missing or incompatible cuBLAS installation therefore correctly reports CUDA as unavailable.
+
 ## What is accelerated
 
 This first implementation routes `Matrix.multiply(Matrix)` and the matrix/vector multiplication in `DenseLayer.forward` through the selected backend. CUDA multiplication uses cuBLAS SGEMM through JCuda.
@@ -48,9 +50,19 @@ The CUDA backend currently allocates device memory and transfers data for each m
 - NVIDIA driver
 - CUDA 12.x runtime/cuBLAS compatible with JCuda 12.6
 
-JCuda's Java and native binding jars are resolved by Gradle for the current operating system and architecture.
+JCuda's Java and native binding jars are resolved by Gradle for the current operating system and architecture. The NVIDIA CUDA/cuBLAS libraries themselves must still be present on the system.
 
-On current Arch Linux, the main `cuda` package is CUDA 13.x. For older NVIDIA architectures such as Pascal, use a compatible CUDA 12.x installation (for example the AUR `cuda-12.9` package) when testing this branch.
+The current Arch Linux `cuda` package is CUDA 13.x and provides `libcublas.so.13`, while this experimental backend uses JCuda 12.6 and therefore needs a CUDA 12.x cuBLAS installation. CUDA 13 also removed library support for Maxwell, Pascal, and Volta GPUs, so CUDA 12.x is required for those architectures. A compatible CUDA 12.x installation such as CUDA 12.9 is therefore the intended test environment for this branch.
+
+Useful Linux diagnostics:
+
+```bash
+nvidia-smi
+nvcc --version
+ldconfig -p | grep -E 'libcublas\.so|libcublasLt\.so'
+```
+
+For this branch, the important result is that a CUDA 12 installation exposes `libcublas.so.12` and `libcublasLt.so.12` to the JVM.
 
 ## Build and test
 
@@ -59,7 +71,7 @@ git switch cuda
 ./gradlew test
 ```
 
-The CUDA parity test automatically skips when CUDA is unavailable.
+The CUDA parity test automatically skips when the complete CUDA/cuBLAS backend is unavailable.
 
 To build the normal jars:
 
