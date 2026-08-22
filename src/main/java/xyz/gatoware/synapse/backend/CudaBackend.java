@@ -62,9 +62,6 @@ public final class CudaBackend implements Backend {
 		}
 	}
 
-	/** Creates and initializes a CUDA backend.
-	 * @throws IllegalStateException if CUDA or cuBLAS cannot be initialized
-	 */
 	public CudaBackend() {
 		try {
 			JCuda.setExceptionsEnabled(true);
@@ -79,7 +76,6 @@ public final class CudaBackend implements Backend {
 		}
 	}
 
-	/** Checks whether the complete CUDA/cuBLAS backend can initialize. */
 	public static boolean isAvailable() {
 		cublasHandle probeHandle = new cublasHandle();
 		boolean handleCreated = false;
@@ -123,18 +119,11 @@ public final class CudaBackend implements Backend {
 		}
 	}
 
-	/** Returns whether the fused resident Dense+ReLU inference path is available.
-	 * Failure to initialize NVRTC does not disable ordinary cuBLAS acceleration.
-	 */
 	public synchronized boolean supportsResidentRelu() {
 		ensureOpen();
 		return ensureReluKernel();
 	}
 
-	/** Computes weights*input + bias followed by ReLU entirely on the GPU.
-	 * The returned Matrix is an internal resident intermediate: its host values
-	 * are placeholders until a later materializing operation consumes it.
-	 */
 	public synchronized Matrix denseReluResident(Matrix weights, Matrix biases, Matrix input) {
 		ensureOpen();
 		if (!ensureReluKernel())
@@ -166,15 +155,28 @@ public final class CudaBackend implements Backend {
 		DeviceBuffer result = acquire(rows * columns);
 		boolean owned = true;
 		try {
-			JCublas2.cublasSgemm(handle,
-				cublasOperation.CUBLAS_OP_N,
-				cublasOperation.CUBLAS_OP_N,
-				columns, rows, shared,
-				alpha,
-				right.pointer, columns,
-				left.pointer, shared,
-				beta,
-				result.pointer, columns);
+			if (columns == 1) {
+				/* Row-major left is seen by cuBLAS as the column-major transpose.
+				 * SGEMV with OP_T therefore computes the original left * vector. */
+				JCublas2.cublasSgemv(handle,
+					cublasOperation.CUBLAS_OP_T,
+					shared, rows,
+					alpha,
+					left.pointer, shared,
+					right.pointer, 1,
+					beta,
+					result.pointer, 1);
+			} else {
+				JCublas2.cublasSgemm(handle,
+					cublasOperation.CUBLAS_OP_N,
+					cublasOperation.CUBLAS_OP_N,
+					columns, rows, shared,
+					alpha,
+					right.pointer, columns,
+					left.pointer, shared,
+					beta,
+					result.pointer, columns);
+			}
 			owned = false;
 			return result;
 		} finally {
