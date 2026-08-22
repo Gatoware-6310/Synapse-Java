@@ -17,9 +17,18 @@ public final class CudaBenchmark {
 
 	public static void main(String[] args) {
 		System.out.println("Synapse CUDA benchmark");
-		System.out.println("CUDA available: " + Synapse.isDeviceAvailable(Devices.CUDA));
-		if (!Synapse.isDeviceAvailable(Devices.CUDA)) {
-			System.out.println("CUDA backend unavailable; nothing to benchmark.");
+		boolean available = Synapse.isDeviceAvailable(Devices.CUDA);
+		System.out.println("CUDA available: " + available);
+		if (!available) {
+			System.out.println("CUDA backend unavailable.");
+			System.out.println("Attempting explicit initialization to show the cause...");
+			try {
+				Synapse.useDevice(Devices.CUDA);
+				System.out.println("Unexpectedly initialized CUDA successfully on the second attempt.");
+				Synapse.useDevice(Devices.CPU);
+			} catch (Throwable error) {
+				printError(error);
+			}
 			return;
 		}
 
@@ -107,6 +116,17 @@ public final class CudaBenchmark {
 		System.out.printf("  CPU : %.3f ms%n", cpuMs);
 		System.out.printf("  CUDA: %.3f ms%n", cudaMs);
 		System.out.printf("  Speedup: %.2fx%n", cpuMs / cudaMs);
+	}
+
+	private static void printError(Throwable error) {
+		System.out.println("Initialization error chain:");
+		Throwable current = error;
+		int depth = 0;
+		while (current != null) {
+			System.out.printf("  [%d] %s: %s%n", depth, current.getClass().getName(), current.getMessage());
+			current = current.getCause();
+			depth++;
+		}
 	}
 
 	private static float[][] randomValues(int rows, int columns) {
