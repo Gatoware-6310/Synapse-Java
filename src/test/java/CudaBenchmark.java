@@ -43,7 +43,6 @@ public final class CudaBenchmark {
 		for (int batch : new int[] {1, 32, 128})
 			benchmarkNetworkForward(784, 1024, 3, 10, batch);
 		benchmarkTrainingSweep(256, 784, 256, 2, 10);
-		Synapse.setCudaBatchSize(32);
 		Synapse.useDevice(Devices.CPU);
 	}
 
@@ -133,11 +132,10 @@ public final class CudaBenchmark {
 		System.out.printf("  CPU baseline: %.3f ms%n", cpuMs);
 
 		for (int batch : new int[] {16, 32, 64, 128, 256}) {
-			Synapse.setCudaBatchSize(batch);
 			Synapse.useDevice(Devices.CUDA);
 			NeuralNetwork cuda = new NeuralNetwork(inputSize, hiddenSize, hiddenLayers, outputs);
 			start = System.nanoTime();
-			cuda.fit(dataset, 1, 0.001f);
+			cuda.fit(dataset, 1, 0.001f, batch);
 			double cudaMs = (System.nanoTime() - start) / 1_000_000.0;
 			System.out.printf("  CUDA batch %-3d: %8.3f ms  (%6.2fx)%n", batch, cudaMs, cpuMs / cudaMs);
 		}
