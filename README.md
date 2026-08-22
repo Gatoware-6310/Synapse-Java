@@ -98,6 +98,14 @@ Or, while keeping the default loss function:
 network.fit(dataset, 100, 0.01f, new SGD());
 ```
 
+Training batch size can also be supplied as the final argument. Existing `fit(...)` calls continue to use the default batch size:
+
+```java
+network.fit(dataset, 10, 0.001f, 64);
+network.fit(dataset, 10, 0.001f, new Adam(), 64);
+network.fit(dataset, 10, 0.001f, new Adam(), true, 64);
+```
+
 Optimizers included with Synapse are:
 
 - `Adam` (default)
@@ -141,6 +149,28 @@ The most recent average loss is also available after training with `getLastLoss(
 ```java
 System.out.println("Final loss: " + network.getLastLoss());
 ```
+
+## CUDA acceleration
+CPU remains the default. On supported NVIDIA systems, CUDA can be enabled explicitly:
+
+```java
+import xyz.gatoware.synapse.Devices;
+import xyz.gatoware.synapse.Synapse;
+
+if (Synapse.isDeviceAvailable(Devices.CUDA)) {
+	Synapse.useDevice(Devices.CUDA);
+}
+```
+
+CUDA accelerates matrix multiplication, dense inference, mini-batch training, backpropagation, and the built-in optimizers. For the standard `Dense/ReLU/.../Softmax` classifier trained with `SparseCategoricalCrossEntropy`, Synapse keeps the expensive training path resident on the GPU and fuses the final Softmax/cross-entropy derivative.
+
+A batch size can be chosen per training call:
+
+```java
+network.fit(dataset, 10, 0.001f, 128);
+```
+
+See [`CUDA.md`](CUDA.md) for requirements, behavior, benchmarking, and CUDA-specific details.
 
 ## Saving models
 Saving a model and loading it again is straightforward. For example:
