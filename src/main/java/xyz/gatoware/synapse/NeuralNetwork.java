@@ -132,7 +132,7 @@ public class NeuralNetwork {
 			fitCuda(dataset, lossFunction, epochs, learningRate, optimizer, logging, Synapse.getCudaBatchSize());
 			return;
 		}
-		fitCpu(dataset, lossFunction, epochs, learningRate, optimizer, logging);
+		fitCpu(dataset, lossFunction, epochs, learningRate, optimizer, logging, 1);
 	}
 
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
@@ -144,25 +144,47 @@ public class NeuralNetwork {
 			fitCuda(dataset, lossFunction, epochs, learningRate, optimizer, logging, batchSize);
 			return;
 		}
-		fitCpu(dataset, lossFunction, epochs, learningRate, optimizer, logging);
+		fitCpu(dataset, lossFunction, epochs, learningRate, optimizer, logging, batchSize);
 	}
 
 	private void fitCpu(Dataset dataset, LossFunction lossFunction, int epochs, float learningRate,
-			Optimizer optimizer, boolean logging) {
+			Optimizer optimizer, boolean logging, int batchSize) {
 		int[] order = makeOrder(dataset.size());
 		Random random = new Random();
+		int featureCount = dataset.getInputs().columns();
+
 		for (int epoch = 0; epoch < epochs; epoch++) {
 			shuffle(order, random);
 			float totalLoss = 0.0f;
-			for (int index : order) {
-				Matrix output = forwardTraining(dataset.getInput(index));
-				Matrix predicted = rowVector(output);
-				Matrix actual = rowVector(dataset.getTarget(index));
-				totalLoss += lossFunction.calculate(predicted, actual);
-				Matrix gradient = columnVector(lossFunction.gradient(predicted, actual));
+
+			for (int start = 0; start < order.length; start += batchSize) {
+				int currentBatchSize = Math.min(batchSize, order.length - start);
+				Matrix batchInput = new Matrix(featureCount, currentBatchSize);
+				for (int sample = 0; sample < currentBatchSize; sample++) {
+					int index = order[start + sample];
+					for (int feature = 0; feature < featureCount; feature++)
+						batchInput.values[feature][sample] = dataset.getInputs().values[index][feature];
+				}
+
+				Matrix output = forwardTraining(batchInput);
+				Matrix outputGradient = new Matrix(output.rows(), currentBatchSize);
+				for (int sample = 0; sample < currentBatchSize; sample++) {
+					int index = order[start + sample];
+					Matrix predicted = rowFromColumn(output, sample);
+					Matrix actual = rowVector(dataset.getTarget(index));
+					totalLoss += lossFunction.calculate(predicted, actual);
+					Matrix sampleGradient = lossFunction.gradient(predicted, actual);
+					if (sampleGradient.rows() != 1 || sampleGradient.columns() != output.rows())
+						throw new IllegalStateException("Loss gradient must match the network output width");
+					for (int neuron = 0; neuron < output.rows(); neuron++)
+						outputGradient.values[neuron][sample] = sampleGradient.values[0][neuron];
+				}
+
+				Matrix gradient = outputGradient;
 				for (int layer = layers.size() - 1; layer >= 0; layer--)
 					gradient = layers.get(layer).backward(gradient, learningRate, optimizer);
 			}
+
 			lastLoss = totalLoss / dataset.size();
 			if (logging)
 				System.out.printf("Epoch %d loss: %.6f accuracy: %.2f%%%n", epoch + 1, lastLoss,
