@@ -1,9 +1,12 @@
 import java.util.Random;
 
 import xyz.gatoware.synapse.Devices;
+import xyz.gatoware.synapse.NeuralNetwork;
 import xyz.gatoware.synapse.Synapse;
 import xyz.gatoware.synapse.activation.ReLU;
+import xyz.gatoware.synapse.activation.Softmax;
 import xyz.gatoware.synapse.layer.DenseLayer;
+import xyz.gatoware.synapse.layer.Layer;
 import xyz.gatoware.synapse.matrix.Matrix;
 
 /** Simple manual benchmark for comparing Synapse CPU and CUDA backends. */
@@ -36,6 +39,8 @@ public final class CudaBenchmark {
 		benchmarkCachedMultiply(512);
 		for (int batch : new int[] {1, 8, 32, 64, 128, 256})
 			benchmarkDenseForward(784, 1024, batch);
+		for (int batch : new int[] {1, 32, 128})
+			benchmarkNetworkForward(784, 1024, 3, 10, batch);
 		Synapse.useDevice(Devices.CPU);
 	}
 
@@ -77,10 +82,34 @@ public final class CudaBenchmark {
 		DenseLayer cpuLayer = new DenseLayer(inputSize, hiddenSize, new ReLU());
 		DenseLayer cudaLayer = new DenseLayer(cpuLayer.getWeights().copy(), cpuLayer.getBiases().copy(), new ReLU());
 		Matrix input = new Matrix(randomValues(inputSize, batchSize));
-
 		double cpuMs = timeMs(Devices.CPU, () -> cpuLayer.forward(input));
 		double cudaMs = timeMs(Devices.CUDA, () -> cudaLayer.forward(input));
 		printResult("Dense forward " + inputSize + " -> " + hiddenSize + " batch " + batchSize, cpuMs, cudaMs);
+	}
+
+	private static void benchmarkNetworkForward(int inputSize, int hiddenSize, int hiddenLayers, int outputs, int batchSize) {
+		Layer[] cpuLayers = new Layer[hiddenLayers + 1];
+		Layer[] cudaLayers = new Layer[hiddenLayers + 1];
+		int previous = inputSize;
+		for (int i = 0; i < hiddenLayers; i++) {
+			Matrix weights = new Matrix(randomValues(hiddenSize, previous));
+			Matrix biases = new Matrix(randomValues(hiddenSize, 1));
+			cpuLayers[i] = new DenseLayer(weights.copy(), biases.copy(), new ReLU());
+			cudaLayers[i] = new DenseLayer(weights.copy(), biases.copy(), new ReLU());
+			previous = hiddenSize;
+		}
+		Matrix finalWeights = new Matrix(randomValues(outputs, previous));
+		Matrix finalBiases = new Matrix(randomValues(outputs, 1));
+		cpuLayers[hiddenLayers] = new DenseLayer(finalWeights.copy(), finalBiases.copy(), new Softmax());
+		cudaLayers[hiddenLayers] = new DenseLayer(finalWeights.copy(), finalBiases.copy(), new Softmax());
+
+		NeuralNetwork cpuNetwork = new NeuralNetwork(cpuLayers);
+		NeuralNetwork cudaNetwork = new NeuralNetwork(cudaLayers);
+		Matrix input = new Matrix(randomValues(inputSize, batchSize));
+		double cpuMs = timeMs(Devices.CPU, () -> cpuNetwork.forward(input));
+		double cudaMs = timeMs(Devices.CUDA, () -> cudaNetwork.forward(input));
+		printResult("Network " + inputSize + " -> " + hiddenSize + " x" + hiddenLayers + " -> " + outputs
+			+ " batch " + batchSize, cpuMs, cudaMs);
 	}
 
 	private static double timeMs(Devices device, Runnable task) {
