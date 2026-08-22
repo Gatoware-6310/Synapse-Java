@@ -78,6 +78,13 @@ NeuralNetwork network = new NeuralNetwork(new Layer[] {
 network.fit(dataset, 10, 0.001f);
 ```
 
+A batch size can optionally be passed to `fit`:
+
+```java
+network.fit(dataset, 10, 0.001f, 64); // 64 being the batch size
+network.fit(dataset, 10, 0.001f, new Adam(), 64);
+```
+
 For simple fully-connected networks, Synapse can also construct the layers automatically by passing the input size, hidden layer size, amount of hidden layers, and output size:
 
 ```java
@@ -150,13 +157,6 @@ Synapse.useDevice(Devices.CUDA);
 ```
 
 Synapse 0.1.2 supports CUDA **12.0 through 12.9**.
-
-A batch size can optionally be passed to `fit`:
-
-```java
-network.fit(dataset, 10, 0.001f, 64); // 64 being the batch size
-network.fit(dataset, 10, 0.001f, new Adam(), 64);
-```
 
 If you directly modify `Matrix.values` after that matrix has been used on CUDA, call `matrix.markDirty()` before using it on CUDA again. For example,
 
