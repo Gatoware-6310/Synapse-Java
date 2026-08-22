@@ -54,9 +54,6 @@ public class Matrix {
 				temp[j][i] = m[i][j];
 
 		this.values = temp;
-		int previousRows = this.rows;
-		this.rows = this.columns;
-		this.columns = previousRows;
 		return this;
 	}
 
