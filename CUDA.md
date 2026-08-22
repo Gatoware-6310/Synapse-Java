@@ -31,19 +31,25 @@ Availability can be checked with:
 Synapse.isDeviceAvailable(Devices.CUDA);
 ```
 
+CUDA training batch size defaults to 32 and can be tuned explicitly:
+
+```java
+Synapse.setCudaBatchSize(64);
+```
+
 ## CUDA execution
 
 `Matrix.multiply(Matrix)` and dense-layer multiplication use cuBLAS. Batch-size-1 multiplication uses SGEMV; multi-column/batched multiplication uses SGEMM.
 
 `DenseLayer.forward` accepts `inputSize x batchSize` matrices, with one sample per column.
 
-For `NeuralNetwork.forward`, eligible hidden `DenseLayer + ReLU` stages use a GPU-resident fast path. Synapse performs the matrix multiply on cuBLAS, then launches a fused bias+ReLU CUDA kernel compiled once with NVRTC. The hidden result stays in VRAM and feeds directly into the next layer without a host readback or re-upload. The final layer materializes its output so the returned `Matrix.values` is valid Java data.
+For `NeuralNetwork.forward`, eligible hidden `DenseLayer + ReLU` stages use a GPU-resident fast path. Synapse performs the matrix multiply on cuBLAS, then launches a fused bias+ReLU CUDA kernel compiled once with NVRTC. The hidden result stays in VRAM and feeds directly into the next layer without a host readback or re-upload. The final layer materializes its output so the returned `Matrix.values` remains immediately valid Java data.
 
 ## CUDA training
 
-When CUDA is selected, `NeuralNetwork.fit()` now uses mini-batches of 32 samples for compatible dense networks.
+When CUDA is selected, `NeuralNetwork.fit()` uses mini-batches for compatible dense networks.
 
-The training path keeps the expensive work on the GPU:
+The standard `Dense/ReLU/.../Softmax + SparseCategoricalCrossEntropy` training path now keeps essentially all expensive work on the GPU:
 
 - hidden Dense + ReLU forward passes stay resident in VRAM
 - ReLU derivatives run in a CUDA kernel
@@ -53,8 +59,11 @@ The training path keeps the expensive work on the GPU:
 - SGD, Momentum, AdaGrad, RMSProp, and Adam parameter updates run in CUDA kernels
 - Adam/Momentum/AdaGrad/RMSProp state remains resident in VRAM
 - updated weights and biases remain device-authoritative between batches
+- final Dense + bias + numerically stable Softmax + sparse cross-entropy derivative is fused on CUDA
+- the fused Softmax/cross-entropy path uses the exact `probabilities - one-hot` logit derivative and does not materialize probabilities on the CPU
+- only the tiny per-batch loss values are copied back for `lastLoss`/logging
 
-The final activation/loss boundary is intentionally materialized. Softmax and the configured `LossFunction` continue to use the existing Java API; their resulting gradient is uploaded once and backpropagation immediately returns to the GPU.
+Custom loss functions or unsupported final activations still use the compatibility path that materializes the final boundary while keeping hidden-layer CUDA acceleration.
 
 GPU-updated parameters are synchronized back into public `Matrix.values` before `fit()` returns, before model saving, and when the CUDA backend is closed.
 
@@ -113,7 +122,7 @@ Benchmark with:
 LD_LIBRARY_PATH="$HOME/.local/cuda-12.9/lib64:$LD_LIBRARY_PATH" ./gradlew cudaBenchmark
 ```
 
-The benchmark includes raw/cached 512x512 multiplication, dense forward at batch sizes 1 through 256, a multi-layer `784 -> 1024 x3 -> 10` network, and a full training-epoch CPU/CUDA comparison.
+The benchmark includes raw/cached 512x512 multiplication, dense forward at batch sizes 1 through 256, a multi-layer `784 -> 1024 x3 -> 10` network, and a training batch-size sweep across 16, 32, 64, 128, and 256.
 
 Build normal artifacts with:
 
