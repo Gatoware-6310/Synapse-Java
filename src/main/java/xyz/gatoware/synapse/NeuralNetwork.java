@@ -37,7 +37,6 @@ public class NeuralNetwork {
 	private static final int FILE_VERSION = 1;
 	private static final int MAX_LAYERS = 1_000_000;
 	private static final int MAX_MATRIX_DIMENSION = 1_000_000;
-	private static final int CUDA_BATCH_SIZE = 32;
 
 	private List<Layer> layers = new ArrayList<>();
 	private float lastLoss = Float.NaN;
@@ -144,24 +143,29 @@ public class NeuralNetwork {
 		}
 	}
 
-	/** CUDA training uses mini-batches and keeps all hidden dense/ReLU activations,
-	 * backprop GEMMs, gradients and optimizer state on the GPU. The final
-	 * activation/loss boundary is materialized so Softmax and arbitrary LossFunction
-	 * implementations keep their existing Java API.
+	/** CUDA training uses mini-batches and keeps hidden dense/ReLU activations,
+	 * backprop GEMMs, gradients, and optimizer state on the GPU. For the standard
+	 * final Softmax + SparseCategoricalCrossEntropy pair, the derivative is fused
+	 * algebraically as (probabilities - one-hot), skipping the Softmax Jacobian.
 	 */
 	private void fitCuda(Dataset dataset, LossFunction lossFunction, int epochs, float learningRate,
 			Optimizer optimizer, boolean logging) {
 		int[] order = makeOrder(dataset.size());
 		Random random = new Random();
 		int featureCount = dataset.getInputs().columns();
+		int cudaBatchSize = Synapse.getCudaBatchSize();
+		boolean fusedSoftmaxCrossEntropy = lossFunction instanceof SparseCategoricalCrossEntropy
+			&& layers.get(layers.size() - 1) instanceof DenseLayer finalDense
+			&& finalDense.getActivationFunction() instanceof Softmax
+			&& dataset.getTargets().columns() == 1;
 
 		try {
 			for (int epoch = 0; epoch < epochs; epoch++) {
 				shuffle(order, random);
 				float totalLoss = 0.0f;
 
-				for (int start = 0; start < order.length; start += CUDA_BATCH_SIZE) {
-					int batchSize = Math.min(CUDA_BATCH_SIZE, order.length - start);
+				for (int start = 0; start < order.length; start += cudaBatchSize) {
+					int batchSize = Math.min(cudaBatchSize, order.length - start);
 					Matrix batchInput = new Matrix(featureCount, batchSize);
 					for (int sample = 0; sample < batchSize; sample++) {
 						int index = order[start + sample];
@@ -178,22 +182,43 @@ public class NeuralNetwork {
 							output = dense.forward(output);
 					}
 
-					Matrix outputGradient = new Matrix(output.rows(), batchSize);
-					for (int sample = 0; sample < batchSize; sample++) {
-						int index = order[start + sample];
-						Matrix predicted = rowFromColumn(output, sample);
-						Matrix actual = rowVector(dataset.getTarget(index));
-						totalLoss += lossFunction.calculate(predicted, actual);
-						Matrix sampleGradient = lossFunction.gradient(predicted, actual);
-						if (sampleGradient.rows() != 1 || sampleGradient.columns() != output.rows())
-							throw new IllegalStateException("Loss gradient must match the network output width");
-						for (int neuron = 0; neuron < output.rows(); neuron++)
-							outputGradient.values[neuron][sample] = sampleGradient.values[0][neuron];
-					}
+					Matrix gradient;
+					if (fusedSoftmaxCrossEntropy) {
+						Matrix logitsGradient = new Matrix(output.rows(), batchSize);
+						for (int sample = 0; sample < batchSize; sample++) {
+							int index = order[start + sample];
+							float classId = dataset.getTargets().values[index][0];
+							int target = (int) classId;
+							if (classId != target || target < 0 || target >= output.rows())
+								throw new IllegalArgumentException("Actual matrix must contain valid class IDs");
 
-					Matrix gradient = outputGradient;
-					for (int layerIndex = layers.size() - 1; layerIndex >= 0; layerIndex--)
-						gradient = layers.get(layerIndex).backward(gradient, learningRate, optimizer);
+							float probability = Math.max(1e-7f, Math.min(1.0f - 1e-7f, output.values[target][sample]));
+							totalLoss -= (float) Math.log(probability);
+							for (int neuron = 0; neuron < output.rows(); neuron++)
+								logitsGradient.values[neuron][sample] = output.values[neuron][sample];
+							logitsGradient.values[target][sample] -= 1.0f;
+						}
+						DenseLayer finalLayer = (DenseLayer) layers.get(layers.size() - 1);
+						gradient = finalLayer.backwardCudaPreactivated(logitsGradient, learningRate, optimizer);
+						for (int layerIndex = layers.size() - 2; layerIndex >= 0; layerIndex--)
+							gradient = layers.get(layerIndex).backward(gradient, learningRate, optimizer);
+					} else {
+						Matrix outputGradient = new Matrix(output.rows(), batchSize);
+						for (int sample = 0; sample < batchSize; sample++) {
+							int index = order[start + sample];
+							Matrix predicted = rowFromColumn(output, sample);
+							Matrix actual = rowVector(dataset.getTarget(index));
+							totalLoss += lossFunction.calculate(predicted, actual);
+							Matrix sampleGradient = lossFunction.gradient(predicted, actual);
+							if (sampleGradient.rows() != 1 || sampleGradient.columns() != output.rows())
+								throw new IllegalStateException("Loss gradient must match the network output width");
+							for (int neuron = 0; neuron < output.rows(); neuron++)
+								outputGradient.values[neuron][sample] = sampleGradient.values[0][neuron];
+						}
+						gradient = outputGradient;
+						for (int layerIndex = layers.size() - 1; layerIndex >= 0; layerIndex--)
+							gradient = layers.get(layerIndex).backward(gradient, learningRate, optimizer);
+					}
 				}
 
 				lastLoss = totalLoss / dataset.size();
@@ -226,7 +251,8 @@ public class NeuralNetwork {
 
 	private static int[] makeOrder(int size) {
 		int[] order = new int[size];
-		for (int i = 0; i < size; i++) order[i] = i;
+		for (int i = 0; i < size; i++)
+			order[i] = i;
 		return order;
 	}
 
