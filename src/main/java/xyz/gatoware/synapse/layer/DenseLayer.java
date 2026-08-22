@@ -155,28 +155,49 @@ public class DenseLayer implements Layer {
 				if (outputGradient.rows() != outputSize || outputGradient.columns() != batch)
 					throw new IllegalArgumentException("Dense layer output gradient dimensions do not match the last forward pass");
 
-				Matrix weightedGradients = new Matrix(outputSize, batch);
-				float[] weighted = new float[outputSize];
-				float[] output = new float[outputSize];
-				float[] upstream = new float[outputSize];
-				float[] result = new float[outputSize];
-				for (int sample = 0; sample < batch; sample++) {
-					for (int neuron = 0; neuron < outputSize; neuron++) {
-						weighted[neuron] = lastBatchWeighted.values[neuron][sample];
-						output[neuron] = lastBatchOutput.values[neuron][sample];
-						upstream[neuron] = outputGradient.values[neuron][sample];
-					}
-					activationFunction.backward(weighted, output, upstream, result);
-					for (int neuron = 0; neuron < outputSize; neuron++)
-						weightedGradients.values[neuron][sample] = result[neuron];
-				}
+				Matrix weightedGradients = activationBackwardBatch(outputGradient);
 				return cuda.denseBackwardUpdate(weights, biases, lastBatchInput, weightedGradients,
 					optimizer, learningRate);
 			}
 		}
 
-		if (lastForwardWasBatch)
-			throw new IllegalStateException("Backward after a batched forward requires the CUDA backend");
+		if (lastForwardWasBatch) {
+			if (lastBatchInput == null || lastBatchWeighted == null || lastBatchOutput == null)
+				throw new IllegalStateException("Dense layer must run forward before backward");
+			int outputSize = weights.rows();
+			int inputSize = weights.columns();
+			int batch = lastBatchInput.columns();
+			if (outputGradient.rows() != outputSize || outputGradient.columns() != batch)
+				throw new IllegalArgumentException("Dense layer output gradient dimensions do not match the last forward pass");
+
+			Matrix weightedGradients = activationBackwardBatch(outputGradient);
+			Matrix inputGradient = new Matrix(inputSize, batch);
+			Matrix batchWeightGradients = new Matrix(outputSize, inputSize);
+			Matrix batchBiasGradients = new Matrix(outputSize, 1);
+			float scale = 1.0f / batch;
+
+			for (int neuron = 0; neuron < outputSize; neuron++) {
+				float biasSum = 0.0f;
+				for (int sample = 0; sample < batch; sample++) {
+					float gradient = weightedGradients.values[neuron][sample];
+					biasSum += gradient;
+					for (int input = 0; input < inputSize; input++) {
+						inputGradient.values[input][sample] += weights.values[neuron][input] * gradient;
+						batchWeightGradients.values[neuron][input] += gradient * lastBatchInput.values[input][sample];
+					}
+				}
+				batchBiasGradients.values[neuron][0] = biasSum * scale;
+				for (int input = 0; input < inputSize; input++)
+					batchWeightGradients.values[neuron][input] *= scale;
+			}
+
+			optimizer.update(weights, batchWeightGradients, learningRate);
+			optimizer.update(biases, batchBiasGradients, learningRate);
+			weights.markDirty();
+			biases.markDirty();
+			return inputGradient;
+		}
+
 		if (lastInput == null)
 			throw new IllegalStateException("Dense layer must run forward before backward");
 		if (outputGradient.rows() != weights.rows() || outputGradient.columns() != 1)
@@ -206,6 +227,27 @@ public class DenseLayer implements Layer {
 		weights.markDirty();
 		biases.markDirty();
 		return inputGradient;
+	}
+
+	private Matrix activationBackwardBatch(Matrix outputGradient) {
+		int outputSize = weights.rows();
+		int batch = lastBatchInput.columns();
+		Matrix weightedGradients = new Matrix(outputSize, batch);
+		float[] weighted = new float[outputSize];
+		float[] output = new float[outputSize];
+		float[] upstream = new float[outputSize];
+		float[] result = new float[outputSize];
+		for (int sample = 0; sample < batch; sample++) {
+			for (int neuron = 0; neuron < outputSize; neuron++) {
+				weighted[neuron] = lastBatchWeighted.values[neuron][sample];
+				output[neuron] = lastBatchOutput.values[neuron][sample];
+				upstream[neuron] = outputGradient.values[neuron][sample];
+			}
+			activationFunction.backward(weighted, output, upstream, result);
+			for (int neuron = 0; neuron < outputSize; neuron++)
+				weightedGradients.values[neuron][sample] = result[neuron];
+		}
+		return weightedGradients;
 	}
 
 	/**
