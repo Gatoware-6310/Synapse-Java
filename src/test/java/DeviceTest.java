@@ -7,6 +7,8 @@ import org.junit.jupiter.api.Test;
 
 import xyz.gatoware.synapse.Devices;
 import xyz.gatoware.synapse.Synapse;
+import xyz.gatoware.synapse.activation.ReLU;
+import xyz.gatoware.synapse.layer.DenseLayer;
 import xyz.gatoware.synapse.matrix.Matrix;
 
 public class DeviceTest {
@@ -45,7 +47,6 @@ public class DeviceTest {
 	@Test
 	void cudaBackendMatchesCpuWhenAvailable() {
 		Assumptions.assumeTrue(Synapse.isDeviceAvailable(Devices.CUDA));
-
 		float[][] leftValues = {
 			{1.0f, 2.0f, 3.0f},
 			{4.0f, 5.0f, 6.0f}
@@ -58,15 +59,13 @@ public class DeviceTest {
 
 		Synapse.useDevice(Devices.CPU);
 		Matrix cpu = new Matrix(copy(leftValues)).multiply(new Matrix(copy(rightValues)));
-
 		Synapse.useDevice(Devices.CUDA);
 		Matrix cuda = new Matrix(copy(leftValues)).multiply(new Matrix(copy(rightValues)));
-
 		assertMatrixEquals(cpu, cuda);
 	}
 
 	@Test
-	void cudaCacheSeesDirectHostMutationWhenAvailable() {
+	void cudaCacheRefreshesAfterExplicitHostMutationWhenAvailable() {
 		Assumptions.assumeTrue(Synapse.isDeviceAvailable(Devices.CUDA));
 		Synapse.useDevice(Devices.CUDA);
 
@@ -74,18 +73,13 @@ public class DeviceTest {
 			{1.0f, 0.0f},
 			{0.0f, 1.0f}
 		});
-
-		Matrix first = new Matrix(new float[][] {
-			{2.0f, 3.0f}
-		}).multiply(right);
+		Matrix first = new Matrix(new float[][] {{2.0f, 3.0f}}).multiply(right);
 		assertEquals(2.0f, first.values[0][0], 0.001f);
 		assertEquals(3.0f, first.values[0][1], 0.001f);
 
-		// Matrix.values is public API, so the CUDA cache must notice this write.
 		right.values[0][0] = 4.0f;
-		Matrix second = new Matrix(new float[][] {
-			{2.0f, 3.0f}
-		}).multiply(right);
+		right.markDirty();
+		Matrix second = new Matrix(new float[][] {{2.0f, 3.0f}}).multiply(right);
 		assertEquals(8.0f, second.values[0][0], 0.001f);
 		assertEquals(3.0f, second.values[0][1], 0.001f);
 	}
@@ -94,7 +88,6 @@ public class DeviceTest {
 	void cudaCachedResultCanFeedAnotherMultiplyWhenAvailable() {
 		Assumptions.assumeTrue(Synapse.isDeviceAvailable(Devices.CUDA));
 		Synapse.useDevice(Devices.CUDA);
-
 		Matrix value = new Matrix(new float[][] {
 			{1.0f, 2.0f},
 			{3.0f, 4.0f}
@@ -103,13 +96,29 @@ public class DeviceTest {
 			{1.0f, 0.0f},
 			{0.0f, 1.0f}
 		});
-
 		value.multiply(identity).multiply(identity);
-
 		assertEquals(1.0f, value.values[0][0], 0.001f);
 		assertEquals(2.0f, value.values[0][1], 0.001f);
 		assertEquals(3.0f, value.values[1][0], 0.001f);
 		assertEquals(4.0f, value.values[1][1], 0.001f);
+	}
+
+	@Test
+	void batchedDenseCudaMatchesCpuWhenAvailable() {
+		Assumptions.assumeTrue(Synapse.isDeviceAvailable(Devices.CUDA));
+		DenseLayer cpuLayer = new DenseLayer(3, 2, new ReLU());
+		DenseLayer cudaLayer = new DenseLayer(cpuLayer.getWeights().copy(), cpuLayer.getBiases().copy(), new ReLU());
+		Matrix input = new Matrix(new float[][] {
+			{1.0f, 2.0f, 3.0f, 4.0f},
+			{0.5f, 1.5f, 2.5f, 3.5f},
+			{-1.0f, -2.0f, -3.0f, -4.0f}
+		});
+
+		Synapse.useDevice(Devices.CPU);
+		Matrix cpu = cpuLayer.forward(input);
+		Synapse.useDevice(Devices.CUDA);
+		Matrix cuda = cudaLayer.forward(input);
+		assertMatrixEquals(cpu, cuda);
 	}
 
 	private static void assertMatrixEquals(Matrix expected, Matrix actual) {
