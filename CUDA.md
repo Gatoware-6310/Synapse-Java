@@ -35,23 +35,44 @@ if (Synapse.isDeviceAvailable(Devices.CUDA)) {
 
 ## What is accelerated
 
-This implementation routes `Matrix.multiply(Matrix)` and the matrix/vector multiplication in `DenseLayer.forward` through the selected backend. CUDA multiplication uses cuBLAS SGEMM through JCuda.
+`Matrix.multiply(Matrix)` and dense-layer matrix multiplication are routed through cuBLAS SGEMM when CUDA is selected.
 
-Backpropagation, optimizers, activations, and element-wise matrix operations are still CPU code in this branch.
+`DenseLayer.forward` also supports batched inference. Inputs are shaped as `inputSize x batchSize`, with one sample per column. This turns dense inference into matrix-matrix work, which is substantially more GPU-friendly than batch-size-1 inference.
 
-## GPU memory caching
+Backpropagation, optimizers, activations, and element-wise matrix operations are still CPU code in this branch. Batched backward/training is not implemented yet.
 
-The CUDA backend now keeps a bounded cache of device allocations for matrices used by multiplication. Reusing the same matrix can therefore reuse its VRAM allocation instead of allocating and uploading it again for every multiply.
+## High-performance GPU memory cache
 
-Because `Matrix.values` remains public API, callers can still mutate the underlying `float[][]` directly. The CUDA backend validates cached host contents before reuse and re-uploads a matrix when its values have changed, preserving compatibility with existing Synapse code.
+The CUDA backend keeps a bounded cache of device allocations for recently used matrices. Reusing a matrix therefore reuses its VRAM allocation instead of allocating and uploading it for every multiplication.
 
-CUDA multiplication results are also retained in the cache, so a result that immediately feeds another multiplication can reuse the already-populated device allocation.
+The previous implementation fingerprinted every cached `float[][]` on every operation so direct host writes could be detected automatically. That scan was expensive enough to dominate small and medium CUDA operations, so it has been removed from the hot path.
 
-The cache is currently capped at 64 matrices and evicts the least-recently-used allocation when full. All cached allocations are released when switching away from CUDA.
+Synapse-owned matrix operations invalidate their cached device copy automatically. If application code modifies the public `Matrix.values` array directly after that matrix has already been used on CUDA, call:
 
-A host copy of each multiplication result is still produced because the current public API exposes `Matrix.values` directly. This means the branch no longer pays every upload/allocation repeatedly, but still pays a device-to-host copy after each multiply. Removing that final synchronization cost would require a deeper `Matrix` storage redesign or changing the semantics of direct `values` access.
+```java
+matrix.values[0][0] = 123.0f;
+matrix.markDirty();
+```
 
-Mini-batch training is still strongly recommended before treating CUDA benchmarks as representative; the current training loop processes one sample at a time.
+before the matrix participates in another CUDA operation.
+
+CUDA results are cached too, allowing a multiplication result to feed another multiplication without re-uploading the result. The hot cache is capped at 16 matrices.
+
+Evicted allocations are not immediately passed back through `cudaFree`. A small size-segregated device-buffer pool keeps up to 32 allocations for reuse, reducing the cost of repeated `cudaMalloc`/`cudaFree` calls. This is similar in spirit to the caching allocators used by larger ML runtimes.
+
+A host copy of each public multiplication result is still produced because `Matrix.values` is immediately readable Java state. Avoiding that final device-to-host synchronization requires an internal GPU-resident execution path for full network chains; that is the next major performance ceiling.
+
+## Batched inference
+
+A dense layer can now receive multiple samples at once:
+
+```java
+// 784 features, 64 samples
+Matrix batch = new Matrix(784, 64);
+Matrix output = layer.forward(batch); // outputSize x 64
+```
+
+Batch-size-1 forward/backward behavior remains unchanged. Calling `backward` immediately after a batched forward currently throws because batched gradient accumulation has not been implemented yet.
 
 ## Requirements
 
@@ -70,7 +91,15 @@ git pull
 ./gradlew test
 ```
 
-CUDA-specific tests automatically skip when the complete CUDA/cuBLAS backend cannot initialize. When CUDA is available, the suite checks CPU/CUDA numerical parity, cached-result reuse, and correctness after direct `Matrix.values` mutation.
+CUDA-specific tests automatically skip when the complete CUDA/cuBLAS backend cannot initialize. When CUDA is available, the suite checks CPU/CUDA numerical parity, cached-result reuse, explicit host-cache invalidation, and batched dense parity.
+
+To benchmark the CUDA path:
+
+```bash
+./gradlew cudaBenchmark
+```
+
+The benchmark includes raw 512x512 multiplication, fully cached 512x512 multiplication, and dense forward passes at batch sizes 1, 8, 32, 64, 128, and 256.
 
 To build the normal jars:
 
