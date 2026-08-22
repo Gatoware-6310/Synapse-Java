@@ -35,17 +35,34 @@ Synapse.isDeviceAvailable(Devices.CUDA);
 
 `Matrix.multiply(Matrix)` and dense-layer multiplication use cuBLAS. Batch-size-1 multiplication uses SGEMV; multi-column/batched multiplication uses SGEMM.
 
-`DenseLayer.forward` accepts `inputSize x batchSize` matrices for inference, with one sample per column.
+`DenseLayer.forward` accepts `inputSize x batchSize` matrices, with one sample per column.
 
-For `NeuralNetwork.forward`, eligible hidden `DenseLayer + ReLU` stages use a GPU-resident fast path. Synapse performs the matrix multiply on cuBLAS, then launches a fused bias+ReLU CUDA kernel compiled once with NVRTC. The hidden result stays in VRAM and is fed directly into the next layer without a host readback or re-upload. The final layer materializes its output normally so the returned `Matrix.values` is immediately valid Java data.
+For `NeuralNetwork.forward`, eligible hidden `DenseLayer + ReLU` stages use a GPU-resident fast path. Synapse performs the matrix multiply on cuBLAS, then launches a fused bias+ReLU CUDA kernel compiled once with NVRTC. The hidden result stays in VRAM and feeds directly into the next layer without a host readback or re-upload. The final layer materializes its output so the returned `Matrix.values` is valid Java data.
 
-The resident ReLU kernel is optional. If NVRTC/driver-module initialization is unavailable, ordinary cuBLAS CUDA execution still works and Synapse falls back to materialized layer execution.
+## CUDA training
 
-Training intentionally uses the materialized path so existing backward state and optimizer behavior stay correct. Batched backward/training is not implemented yet.
+When CUDA is selected, `NeuralNetwork.fit()` now uses mini-batches of 32 samples for compatible dense networks.
+
+The training path keeps the expensive work on the GPU:
+
+- hidden Dense + ReLU forward passes stay resident in VRAM
+- ReLU derivatives run in a CUDA kernel
+- input gradients use cuBLAS GEMM
+- weight gradients use cuBLAS GEMM and are averaged across the mini-batch
+- bias gradients are reduced in a CUDA kernel
+- SGD, Momentum, AdaGrad, RMSProp, and Adam parameter updates run in CUDA kernels
+- Adam/Momentum/AdaGrad/RMSProp state remains resident in VRAM
+- updated weights and biases remain device-authoritative between batches
+
+The final activation/loss boundary is intentionally materialized. Softmax and the configured `LossFunction` continue to use the existing Java API; their resulting gradient is uploaded once and backpropagation immediately returns to the GPU.
+
+GPU-updated parameters are synchronized back into public `Matrix.values` before `fit()` returns, before model saving, and when the CUDA backend is closed.
+
+CUDA mini-batching is only selected when the network is made of dense layers and every hidden layer can use the resident ReLU path. Unsupported/custom network structures keep the existing CPU training behavior.
 
 ## GPU memory/cache optimizations
 
-The CUDA backend keeps a small identity cache for recently used matrices and a size-segregated VRAM allocation pool. This avoids repeated uploads of unchanged weights/inputs and substantially reduces `cudaMalloc`/`cudaFree` traffic.
+The CUDA backend keeps an identity cache for recently used matrices and a size-segregated VRAM allocation pool. This avoids repeated uploads of unchanged weights/inputs and substantially reduces `cudaMalloc`/`cudaFree` traffic.
 
 The previous implementation fingerprinted every cached `float[][]` on every CUDA operation. That scan was removed because it became a major part of the cost once cuBLAS itself was fast.
 
@@ -58,7 +75,7 @@ matrix.markDirty();
 
 before the next CUDA operation involving that matrix.
 
-CUDA multiplication results are cached too, so chained multiplication can reuse a device-side result. The hot matrix cache is capped at 16 entries. Evicted allocations may enter a reusable pool of up to 32 device buffers instead of immediately being freed.
+Device-authoritative matrices are materialized automatically before eviction if necessary. The hot matrix cache is capped at 128 entries, with a reusable pool of up to 64 device buffers.
 
 ## Batched inference
 
@@ -76,7 +93,7 @@ A full `NeuralNetwork.forward(batch)` can also process batched matrices. Hidden 
 - NVIDIA CUDA-capable GPU
 - NVIDIA driver
 - CUDA/cuBLAS compatible with JCuda 12.6
-- CUDA NVRTC library for the optional GPU-resident fused-ReLU path
+- CUDA NVRTC library for resident fused kernels and CUDA training
 
 On the current test setup, CUDA 12.9 is installed separately and Synapse is launched with its `lib64` directory in `LD_LIBRARY_PATH`.
 
@@ -88,7 +105,7 @@ git pull
 LD_LIBRARY_PATH="$HOME/.local/cuda-12.9/lib64:$LD_LIBRARY_PATH" ./gradlew clean test
 ```
 
-CUDA tests cover CPU/CUDA matrix parity, cache invalidation, chained cached results, batched dense parity, and GPU-resident network parity when NVRTC is available.
+CUDA tests cover CPU/CUDA matrix parity, cache invalidation, chained cached results, batched dense parity, GPU-resident network parity, and a CUDA training update/materialization check when NVRTC is available.
 
 Benchmark with:
 
@@ -96,7 +113,7 @@ Benchmark with:
 LD_LIBRARY_PATH="$HOME/.local/cuda-12.9/lib64:$LD_LIBRARY_PATH" ./gradlew cudaBenchmark
 ```
 
-The benchmark includes raw/cached 512x512 multiplication, dense forward at batch sizes 1 through 256, and a multi-layer `784 -> 1024 x3 -> 10` network at several batch sizes.
+The benchmark includes raw/cached 512x512 multiplication, dense forward at batch sizes 1 through 256, a multi-layer `784 -> 1024 x3 -> 10` network, and a full training-epoch CPU/CUDA comparison.
 
 Build normal artifacts with:
 
