@@ -43,6 +43,41 @@ public final class CudaBackend implements Backend {
 		    }
 		}
 
+		extern \"C\" __global__ void bias_add(float* data, const float* bias, int rows, int cols) {
+		    int index = blockIdx.x * blockDim.x + threadIdx.x;
+		    int count = rows * cols;
+		    if (index < count) {
+		        int row = index / cols;
+		        data[index] += bias[row];
+		    }
+		}
+
+		extern \"C\" __global__ void softmax_xent_delta(
+		        const float* logits, const float* targets, float* delta, float* losses,
+		        int classes, int batch) {
+		    int sample = blockIdx.x * blockDim.x + threadIdx.x;
+		    if (sample >= batch) return;
+		    int target = (int)targets[sample];
+		    float maximum = logits[sample];
+		    for (int c = 1; c < classes; c++) {
+		        float v = logits[c * batch + sample];
+		        if (v > maximum) maximum = v;
+		    }
+		    float sum = 0.0f;
+		    for (int c = 0; c < classes; c++)
+		        sum += expf(logits[c * batch + sample] - maximum);
+		    float inv = 1.0f / sum;
+		    float targetProbability = 0.0f;
+		    for (int c = 0; c < classes; c++) {
+		        int index = c * batch + sample;
+		        float probability = expf(logits[index] - maximum) * inv;
+		        delta[index] = probability - (c == target ? 1.0f : 0.0f);
+		        if (c == target) targetProbability = probability;
+		    }
+		    targetProbability = fmaxf(targetProbability, 1.0e-7f);
+		    losses[sample] = -logf(targetProbability);
+		}
+
 		extern \"C\" __global__ void relu_backward(
 		        float* delta, const float* output, const float* gradient, int count) {
 		    int index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -105,6 +140,8 @@ public final class CudaBackend implements Backend {
 	private final Pointer beta = Pointer.to(betaValue);
 	private CUmodule kernelModule;
 	private CUfunction biasReluFunction;
+	private CUfunction biasAddFunction;
+	private CUfunction softmaxXentDeltaFunction;
 	private CUfunction reluBackwardFunction;
 	private CUfunction biasGradientFunction;
 	private CUfunction optimizerUpdateFunction;
@@ -129,6 +166,9 @@ public final class CudaBackend implements Backend {
 		private DeviceBuffer second;
 		private int step;
 	}
+
+	/** Result of a fused final Dense + Softmax + sparse cross-entropy training step. */
+	public record SoftmaxTrainingResult(Matrix inputGradient, float loss) { }
 
 	public CudaBackend() {
 		try {
@@ -217,6 +257,58 @@ public final class CudaBackend implements Backend {
 		}
 	}
 
+	/**
+	 * Runs the final Dense + bias + Softmax + sparse cross-entropy derivative fully on CUDA,
+	 * updates the final layer parameters, and returns only the resident input gradient plus
+	 * the scalar average loss. No logits or probabilities are copied to the host.
+	 */
+	public synchronized SoftmaxTrainingResult denseSoftmaxCrossEntropyBackwardUpdate(
+			Matrix weights, Matrix biases, Matrix input, int[] targets,
+			Optimizer optimizer, float learningRate) {
+		ensureOpen();
+		if (!ensureKernels())
+			throw new IllegalStateException("CUDA training kernels are unavailable");
+		if (weights.columns() != input.rows() || biases.rows() != weights.rows() || biases.columns() != 1)
+			throw new IllegalArgumentException("Incompatible dense layer dimensions");
+		int classes = weights.rows();
+		int batch = input.columns();
+		if (targets == null || targets.length != batch)
+			throw new IllegalArgumentException("Target count must match CUDA batch size");
+		for (int target : targets)
+			if (target < 0 || target >= classes)
+				throw new IllegalArgumentException("Target class is out of range");
+
+		DeviceBuffer deviceWeights = getOrUpload(weights.values, classes, weights.columns());
+		DeviceBuffer deviceInput = getOrUpload(input.values, input.rows(), batch);
+		DeviceBuffer deviceBias = getOrUpload(biases.values, classes, 1);
+		DeviceBuffer logits = multiplyDevice(deviceWeights, deviceInput, classes, input.rows(), batch);
+		DeviceBuffer delta = acquire(classes * batch);
+		DeviceBuffer deviceTargets = acquire(batch);
+		DeviceBuffer losses = acquire(batch);
+		try {
+			launchBiasAdd(logits, deviceBias, classes, batch);
+			float[] targetValues = new float[batch];
+			for (int i = 0; i < batch; i++) targetValues[i] = targets[i];
+			JCuda.cudaMemcpy(deviceTargets.pointer, Pointer.to(targetValues), (long) batch * Sizeof.FLOAT,
+				cudaMemcpyKind.cudaMemcpyHostToDevice);
+			launchSoftmaxXentDelta(logits, deviceTargets, delta, losses, classes, batch);
+
+			float[] hostLosses = new float[batch];
+			JCuda.cudaMemcpy(Pointer.to(hostLosses), losses.pointer, (long) batch * Sizeof.FLOAT,
+				cudaMemcpyKind.cudaMemcpyDeviceToHost);
+			float totalLoss = 0.0f;
+			for (float value : hostLosses) totalLoss += value;
+
+			Matrix inputGradient = denseBackwardUpdateDevice(weights, biases, input, delta, optimizer, learningRate);
+			return new SoftmaxTrainingResult(inputGradient, totalLoss / batch);
+		} finally {
+			release(logits);
+			release(delta);
+			release(deviceTargets);
+			release(losses);
+		}
+	}
+
 	/** Performs ReLU backward, dense gradients, input-gradient GEMM and optimizer updates on the GPU. */
 	public synchronized Matrix denseReluBackwardUpdate(Matrix weights, Matrix biases, Matrix input,
 			Matrix output, Matrix outputGradient, Optimizer optimizer, float learningRate) {
@@ -228,16 +320,15 @@ public final class CudaBackend implements Backend {
 		DeviceBuffer deviceOutput = getOrUpload(output.values, rows, batch);
 		DeviceBuffer deviceGradient = getOrUpload(outputGradient.values, rows, batch);
 		DeviceBuffer delta = acquire(rows * batch);
-		boolean deltaOwned = true;
 		try {
 			launchReluBackward(delta, deviceOutput, deviceGradient, rows * batch);
 			return denseBackwardUpdateDevice(weights, biases, input, delta, optimizer, learningRate);
 		} finally {
-			if (deltaOwned) release(delta);
+			release(delta);
 		}
 	}
 
-	/** Performs dense backward/update when the activation derivative was calculated on the host (e.g. Softmax). */
+	/** Performs dense backward/update when the activation derivative was calculated on the host. */
 	public synchronized Matrix denseBackwardUpdate(Matrix weights, Matrix biases, Matrix input,
 			Matrix weightedGradient, Optimizer optimizer, float learningRate) {
 		ensureOpen();
@@ -261,7 +352,6 @@ public final class CudaBackend implements Backend {
 		DeviceBuffer biasGradient = acquire(outputSize);
 		boolean inputOwned = true;
 		try {
-			// inputGradient = weights^T * delta. Compute before updating weights.
 			JCublas2.cublasSgemm(handle,
 				cublasOperation.CUBLAS_OP_N, cublasOperation.CUBLAS_OP_T,
 				batch, inputSize, outputSize,
@@ -273,7 +363,6 @@ public final class CudaBackend implements Backend {
 
 			float scaleValue = 1.0f / batch;
 			Pointer scale = Pointer.to(new float[] {scaleValue});
-			// weightGradient = delta * input^T, averaged across the batch.
 			JCublas2.cublasSgemm(handle,
 				cublasOperation.CUBLAS_OP_T, cublasOperation.CUBLAS_OP_N,
 				inputSize, outputSize, batch,
@@ -412,6 +501,24 @@ public final class CudaBackend implements Backend {
 		launch1d(biasReluFunction, rows * columns, params);
 	}
 
+	private void launchBiasAdd(DeviceBuffer data, DeviceBuffer bias, int rows, int columns) {
+		int[] rowsArg = {rows};
+		int[] columnsArg = {columns};
+		Pointer params = Pointer.to(Pointer.to(data.pointer), Pointer.to(bias.pointer),
+			Pointer.to(rowsArg), Pointer.to(columnsArg));
+		launch1d(biasAddFunction, rows * columns, params);
+	}
+
+	private void launchSoftmaxXentDelta(DeviceBuffer logits, DeviceBuffer targets, DeviceBuffer delta,
+			DeviceBuffer losses, int classes, int batch) {
+		int[] classesArg = {classes};
+		int[] batchArg = {batch};
+		Pointer params = Pointer.to(Pointer.to(logits.pointer), Pointer.to(targets.pointer),
+			Pointer.to(delta.pointer), Pointer.to(losses.pointer),
+			Pointer.to(classesArg), Pointer.to(batchArg));
+		launch1d(softmaxXentDeltaFunction, batch, params);
+	}
+
 	private void launchReluBackward(DeviceBuffer delta, DeviceBuffer output, DeviceBuffer gradient, int count) {
 		int[] countArg = {count};
 		Pointer params = Pointer.to(Pointer.to(delta.pointer), Pointer.to(output.pointer),
@@ -473,6 +580,8 @@ public final class CudaBackend implements Backend {
 			kernelModule = new CUmodule();
 			JCudaDriver.cuModuleLoadData(kernelModule, ptx[0]);
 			biasReluFunction = function("bias_relu");
+			biasAddFunction = function("bias_add");
+			softmaxXentDeltaFunction = function("softmax_xent_delta");
 			reluBackwardFunction = function("relu_backward");
 			biasGradientFunction = function("bias_gradient");
 			optimizerUpdateFunction = function("optimizer_update");
