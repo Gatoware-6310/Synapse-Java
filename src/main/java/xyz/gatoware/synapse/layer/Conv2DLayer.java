@@ -78,9 +78,11 @@ public class Conv2DLayer implements Layer {
 			throw new IllegalArgumentException("Activation function cannot be null");
 		if (padding == Padding.NONE && (kernelSize > inputWidth || kernelSize > inputHeight))
 			throw new IllegalArgumentException("Kernel cannot be larger than the input when using no padding");
+
 		long kernelValuesLong = (long) inputChannels * kernelSize * kernelSize;
 		if (kernelValuesLong > Integer.MAX_VALUE)
 			throw new IllegalArgumentException("Convolution kernel is too large");
+
 		this.inputWidth = inputWidth;
 		this.inputHeight = inputHeight;
 		this.inputChannels = inputChannels;
@@ -94,6 +96,7 @@ public class Conv2DLayer implements Layer {
 		this.kernelValues = (int) kernelValuesLong;
 		validateFlattenedSize((long) inputWidth * inputHeight * inputChannels, "Input");
 		validateFlattenedSize((long) outputWidth * outputHeight * filters, "Output");
+
 		this.kernels = new Matrix(filters, kernelValues);
 		this.biases = new Matrix(filters, 1);
 		float scale = (float) Math.sqrt(2.0 / kernelValues);
@@ -107,6 +110,7 @@ public class Conv2DLayer implements Layer {
 		int expectedRows = inputWidth * inputHeight * inputChannels;
 		if (input.rows() != expectedRows || input.columns() <= 0)
 			throw new IllegalArgumentException("Conv2D input must have " + expectedRows + " rows");
+
 		lastInput = input;
 		if (canUseCuda()) {
 			lastOutput = CudaCnnOps.convReluForward(input, kernels, biases, inputWidth, inputHeight, inputChannels,
@@ -116,6 +120,7 @@ public class Conv2DLayer implements Layer {
 			lastForwardCuda = true;
 			return lastOutput;
 		}
+
 		lastForwardCuda = false;
 		int batchSize = input.columns();
 		int outputSize = outputWidth * outputHeight * filters;
@@ -125,6 +130,7 @@ public class Conv2DLayer implements Layer {
 		int padTop = padBefore(inputHeight, outputHeight);
 		float[] weighted = new float[outputSize];
 		float[] activated = new float[outputSize];
+
 		for (int sample = 0; sample < batchSize; sample++) {
 			for (int filter = 0; filter < filters; filter++) {
 				for (int outputY = 0; outputY < outputHeight; outputY++) {
@@ -151,7 +157,8 @@ public class Conv2DLayer implements Layer {
 				}
 			}
 			activationFunction.apply(weighted, activated);
-			for (int value = 0; value < outputSize; value++) lastOutput.values[value][sample] = activated[value];
+			for (int value = 0; value < outputSize; value++)
+				lastOutput.values[value][sample] = activated[value];
 		}
 		return lastOutput;
 	}
@@ -173,11 +180,13 @@ public class Conv2DLayer implements Layer {
 		if (optimizer == null)
 			throw new IllegalArgumentException("Optimizer cannot be null");
 		validateBackwardGradient(outputGradient);
+
 		if (lastForwardCuda && canUseCuda()) {
 			return CudaCnnOps.convReluBackwardUpdate(lastInput, lastOutput, outputGradient, kernels, biases,
 				inputWidth, inputHeight, inputChannels, filters, kernelSize, stride, outputWidth, outputHeight,
 				padBefore(inputWidth, outputWidth), padBefore(inputHeight, outputHeight), optimizer, learningRate);
 		}
+
 		Matrix weightedGradient = activationGradient(outputGradient);
 		Matrix inputGradient = inputGradient(weightedGradient);
 		Matrix kernelGradients = new Matrix(filters, kernelValues);
@@ -186,6 +195,7 @@ public class Conv2DLayer implements Layer {
 		float scale = 1.0f / batchSize;
 		int padLeft = padBefore(inputWidth, outputWidth);
 		int padTop = padBefore(inputHeight, outputHeight);
+
 		for (int sample = 0; sample < batchSize; sample++) {
 			for (int filter = 0; filter < filters; filter++) {
 				for (int outputY = 0; outputY < outputHeight; outputY++) {
@@ -211,9 +221,11 @@ public class Conv2DLayer implements Layer {
 				}
 			}
 		}
+
 		for (int filter = 0; filter < filters; filter++) {
 			biasGradients.values[filter][0] *= scale;
-			for (int value = 0; value < kernelValues; value++) kernelGradients.values[filter][value] *= scale;
+			for (int value = 0; value < kernelValues; value++)
+				kernelGradients.values[filter][value] *= scale;
 		}
 		optimizer.update(kernels, kernelGradients, learningRate);
 		optimizer.update(biases, biasGradients, learningRate);
@@ -223,7 +235,9 @@ public class Conv2DLayer implements Layer {
 	}
 
 	private boolean canUseCuda() {
-		return activationFunction instanceof ReLU && Synapse.backend() instanceof CudaBackend && CudaCnnOps.isAvailable();
+		return activationFunction instanceof ReLU
+			&& Synapse.backend() instanceof CudaBackend
+			&& CudaCnnOps.isAvailable();
 	}
 
 	private void validateBackwardGradient(Matrix outputGradient) {
@@ -235,6 +249,11 @@ public class Conv2DLayer implements Layer {
 
 	private Matrix activationGradient(Matrix outputGradient) {
 		validateBackwardGradient(outputGradient);
+		if (Synapse.backend() instanceof CudaBackend cuda) {
+			cuda.materialize(lastWeighted);
+			cuda.materialize(lastOutput);
+			cuda.materialize(outputGradient);
+		}
 		int outputSize = lastOutput.rows();
 		int batchSize = lastOutput.columns();
 		Matrix result = new Matrix(outputSize, batchSize);
@@ -249,12 +268,18 @@ public class Conv2DLayer implements Layer {
 				upstream[value] = outputGradient.values[value][sample];
 			}
 			activationFunction.backward(weighted, output, upstream, activatedGradient);
-			for (int value = 0; value < outputSize; value++) result.values[value][sample] = activatedGradient[value];
+			for (int value = 0; value < outputSize; value++)
+				result.values[value][sample] = activatedGradient[value];
 		}
 		return result;
 	}
 
 	private Matrix inputGradient(Matrix weightedGradient) {
+		if (Synapse.backend() instanceof CudaBackend cuda) {
+			cuda.materialize(lastInput);
+			cuda.materialize(kernels);
+			cuda.materialize(weightedGradient);
+		}
 		int batchSize = lastInput.columns();
 		Matrix inputGradient = new Matrix(inputWidth * inputHeight * inputChannels, batchSize);
 		int padLeft = padBefore(inputWidth, outputWidth);
@@ -291,63 +316,97 @@ public class Conv2DLayer implements Layer {
 		return totalPadding / 2;
 	}
 
-	private int inputIndex(int channel, int y, int x) { return (channel * inputHeight + y) * inputWidth + x; }
-	private int outputIndex(int filter, int y, int x) { return (filter * outputHeight + y) * outputWidth + x; }
-	private int kernelIndex(int channel, int y, int x) { return (channel * kernelSize + y) * kernelSize + x; }
+	private int inputIndex(int channel, int y, int x) {
+		return (channel * inputHeight + y) * inputWidth + x;
+	}
+
+	private int outputIndex(int filter, int y, int x) {
+		return (filter * outputHeight + y) * outputWidth + x;
+	}
+
+	private int kernelIndex(int channel, int y, int x) {
+		return (channel * kernelSize + y) * kernelSize + x;
+	}
 
 	private static int outputSize(int inputSize, int kernelSize, int stride, Padding padding) {
-		if (padding == Padding.SAME) return (inputSize + stride - 1) / stride;
+		if (padding == Padding.SAME)
+			return (inputSize + stride - 1) / stride;
 		return (inputSize - kernelSize) / stride + 1;
 	}
 
 	private static void validateFlattenedSize(long size, String name) {
-		if (size <= 0 || size > Integer.MAX_VALUE) throw new IllegalArgumentException(name + " is too large");
+		if (size <= 0 || size > Integer.MAX_VALUE)
+			throw new IllegalArgumentException(name + " is too large");
+	}
+
+	private void materializeParameters() {
+		if (Synapse.backend() instanceof CudaBackend cuda) {
+			cuda.materialize(kernels);
+			cuda.materialize(biases);
+		}
 	}
 
 	/** Returns the input width.
 	 * @return the input width
 	 */
 	public int getInputWidth() { return inputWidth; }
+
 	/** Returns the input height.
 	 * @return the input height
 	 */
 	public int getInputHeight() { return inputHeight; }
+
 	/** Returns the number of input channels.
 	 * @return the number of input channels
 	 */
 	public int getInputChannels() { return inputChannels; }
+
 	/** Returns the number of learned filters.
 	 * @return the number of filters
 	 */
 	public int getFilters() { return filters; }
+
 	/** Returns the width and height of each square filter.
 	 * @return the filter size
 	 */
 	public int getKernelSize() { return kernelSize; }
+
 	/** Returns the convolution stride.
 	 * @return the stride
 	 */
 	public int getStride() { return stride; }
+
 	/** Returns the padding mode.
 	 * @return the padding mode
 	 */
 	public Padding getPadding() { return padding; }
+
 	/** Returns the output width.
 	 * @return the output width
 	 */
 	public int getOutputWidth() { return outputWidth; }
+
 	/** Returns the output height.
 	 * @return the output height
 	 */
 	public int getOutputHeight() { return outputHeight; }
+
 	/** Returns the learned convolution kernels.
 	 * @return the kernel matrix
 	 */
-	public Matrix getKernels() { return kernels; }
+	public Matrix getKernels() {
+		materializeParameters();
+		return kernels;
+	}
+
 	/** Returns the learned filter biases.
 	 * @return the bias matrix
 	 */
-	public Matrix getBiases() { return biases; }
+	public Matrix getBiases() {
+		materializeParameters();
+		return biases;
+	}
+
 	/** Returns the activation function used by this layer.
 	 * @return the activation function
 	 */
