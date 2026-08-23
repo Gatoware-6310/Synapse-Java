@@ -25,16 +25,43 @@ public class Conv2DLayer implements Layer {
 	private Matrix lastWeighted;
 	private Matrix lastOutput;
 
+	/** Creates a convolution layer with a stride of 1 and no padding.
+	 * @param inputWidth width of each input image or feature map
+	 * @param inputHeight height of each input image or feature map
+	 * @param inputChannels number of input channels
+	 * @param filters number of filters learned by the layer
+	 * @param kernelSize width and height of each square filter
+	 * @param activationFunction activation function applied to the convolution output
+	 */
 	public Conv2DLayer(int inputWidth, int inputHeight, int inputChannels, int filters, int kernelSize,
 			ActivationFunction activationFunction) {
 		this(inputWidth, inputHeight, inputChannels, filters, kernelSize, 1, Padding.VALID, activationFunction);
 	}
 
+	/** Creates a convolution layer with a stride of 1.
+	 * @param inputWidth width of each input image or feature map
+	 * @param inputHeight height of each input image or feature map
+	 * @param inputChannels number of input channels
+	 * @param filters number of filters learned by the layer
+	 * @param kernelSize width and height of each square filter
+	 * @param padding padding mode used around the input
+	 * @param activationFunction activation function applied to the convolution output
+	 */
 	public Conv2DLayer(int inputWidth, int inputHeight, int inputChannels, int filters, int kernelSize,
 			Padding padding, ActivationFunction activationFunction) {
 		this(inputWidth, inputHeight, inputChannels, filters, kernelSize, 1, padding, activationFunction);
 	}
 
+	/** Creates a convolution layer.
+	 * @param inputWidth width of each input image or feature map
+	 * @param inputHeight height of each input image or feature map
+	 * @param inputChannels number of input channels
+	 * @param filters number of filters learned by the layer
+	 * @param kernelSize width and height of each square filter
+	 * @param stride number of pixels each filter moves per step
+	 * @param padding padding mode used around the input
+	 * @param activationFunction activation function applied to the convolution output
+	 */
 	public Conv2DLayer(int inputWidth, int inputHeight, int inputChannels, int filters, int kernelSize,
 			int stride, Padding padding, ActivationFunction activationFunction) {
 		if (inputWidth <= 0 || inputHeight <= 0 || inputChannels <= 0)
@@ -283,16 +310,63 @@ public class Conv2DLayer implements Layer {
 			throw new IllegalArgumentException(name + " is too large");
 	}
 
+	/** Returns the input width.
+	 * @return the input width
+	 */
 	public int getInputWidth() { return inputWidth; }
+
+	/** Returns the input height.
+	 * @return the input height
+	 */
 	public int getInputHeight() { return inputHeight; }
+
+	/** Returns the number of input channels.
+	 * @return the number of input channels
+	 */
 	public int getInputChannels() { return inputChannels; }
+
+	/** Returns the number of learned filters.
+	 * @return the number of filters
+	 */
 	public int getFilters() { return filters; }
+
+	/** Returns the width and height of each square filter.
+	 * @return the filter size
+	 */
 	public int getKernelSize() { return kernelSize; }
+
+	/** Returns the convolution stride.
+	 * @return the stride
+	 */
 	public int getStride() { return stride; }
+
+	/** Returns the padding mode.
+	 * @return the padding mode
+	 */
 	public Padding getPadding() { return padding; }
+
+	/** Returns the output width.
+	 * @return the output width
+	 */
 	public int getOutputWidth() { return outputWidth; }
+
+	/** Returns the output height.
+	 * @return the output height
+	 */
 	public int getOutputHeight() { return outputHeight; }
+
+	/** Returns the learned convolution kernels.
+	 * @return the kernel matrix
+	 */
 	public Matrix getKernels() { return kernels; }
+
+	/** Returns the learned filter biases.
+	 * @return the bias matrix
+	 */
 	public Matrix getBiases() { return biases; }
+
+	/** Returns the activation function used by this layer.
+	 * @return the activation function
+	 */
 	public ActivationFunction getActivationFunction() { return activationFunction; }
 }
