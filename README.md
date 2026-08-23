@@ -22,8 +22,12 @@ NeuralNetwork defined = new NeuralNetwork(new Layer[] {
 NeuralNetwork simple = new NeuralNetwork(784, 128, 2, 10);
 ```
 
-## Convolutional networks
-CNN layers use the same `Matrix` and `NeuralNetwork` APIs as dense layers. Image data is flattened channel-first (`channel -> y -> x`), with one sample per matrix column.
+## Convolutional Neural Networks
+CNNs are mainly useful for images. A convolution layer looks at small parts of an image at a time and learns useful patterns from them, such as edges and shapes.
+
+Synapse uses the same `NeuralNetwork` and `Matrix` classes for CNNs as it does for normal neural networks.
+
+For example, this creates a small CNN for 28x28 grayscale images:
 
 ```java
 NeuralNetwork cnn = new NeuralNetwork(new Layer[] {
@@ -33,14 +37,49 @@ NeuralNetwork cnn = new NeuralNetwork(new Layer[] {
 });
 ```
 
-`Conv2DLayer` supports configurable stride and `Padding.VALID` / `Padding.SAME`. `MaxPool2DLayer` and `AvgPool2DLayer` provide spatial pooling. No flatten layer is needed because CNN outputs remain flattened matrices.
+The first layer:
 
-Images can be converted to normalized matrices with `Images`:
+```java
+new Conv2DLayer(28, 28, 1, 32, 3, new ReLU())
+```
+
+means:
+
+- `28, 28` - the image width and height
+- `1` - the number of color channels (`1` for grayscale, `3` for RGB)
+- `32` - the number of filters the layer learns
+- `3` - each filter looks at a 3x3 part of the image
+- `new ReLU()` - the activation function
+
+With no padding, a 3x3 filter changes a 28x28 image into 26x26 output for each filter.
+
+The next layer:
+
+```java
+new MaxPool2DLayer(26, 26, 32, 2)
+```
+
+reduces each 26x26 result to 13x13 by taking the largest value from each 2x2 area. This makes the network smaller and faster while keeping the strongest features.
+
+The final `DenseLayer` can use the result directly. No `FlattenLayer` is needed.
+
+`Conv2DLayer` also supports stride and padding:
+
+```java
+new Conv2DLayer(28, 28, 1, 32, 3, 2, Padding.SAME, new ReLU());
+```
+
+- `Padding.VALID` means no padding.
+- `Padding.SAME` adds empty space around the image so the output size is preserved when stride is 1.
+
+Images can be loaded into a `Matrix` and saved again with `Images`:
 
 ```java
 Matrix image = Images.load("image.png", 224, 224);
 Images.save(image, 224, 224, 3, "output.png");
 ```
+
+`Images.load` returns RGB image data with values from `0.0` to `1.0`.
 
 ## Datasets
 Currently, CSV datasets are supported by Synapse, following this format:
@@ -169,14 +208,26 @@ The most recent average loss is also available after training with `getLastLoss(
 System.out.println("Final loss: " + network.getLastLoss());
 ```
 
-## Input gradients
-`forwardTo` returns the activations at a zero-based layer index. `inputGradient` backpropagates from that layer to the input without updating model parameters, enabling techniques such as DeepDream and saliency maps.
+## Working with a specific layer
+`forwardTo` lets you stop at a specific layer and inspect its output:
 
 ```java
-Matrix activation = network.forwardTo(image, 4);
-Matrix gradient = network.inputGradient(image, 4, activation.copy().multiply(2.0f));
-image.add(gradient.multiply(0.01f));
+Matrix output = network.forwardTo(image, 4);
 ```
+
+The layer number starts at `0`.
+
+`inputGradient` tells you how changing the original input would change that layer's output, without changing the network's weights. This can be used for things like DeepDream.
+
+A basic DeepDream-style update looks like this:
+
+```java
+Matrix output = network.forwardTo(image, 4);
+Matrix change = network.inputGradient(image, 4, output.copy().multiply(2.0f));
+image.add(change.multiply(0.01f));
+```
+
+Running that repeatedly changes the image in a direction that makes the selected layer respond more strongly.
 
 ## CUDA
 CUDA acceleration is optional; CPU remains the default.
@@ -210,4 +261,4 @@ network.save("model.snn");
 NeuralNetwork loadedNetwork = NeuralNetwork.load("model.snn");
 ```
 
-`.snn` version 2 stores dense, convolution, max-pooling, and average-pooling layers. Version 1 dense-only model files remain loadable.
+CNN and pooling layers can be saved the same way as dense layers. Older dense-only `.snn` files are still supported.
