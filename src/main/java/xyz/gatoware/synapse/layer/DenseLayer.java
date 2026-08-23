@@ -188,7 +188,7 @@ public class DenseLayer implements Layer {
 		if (optimizer == null)
 			throw new IllegalArgumentException("Optimizer cannot be null");
 
-		if (Synapse.backend() instanceof CudaBackend cuda) {
+		if (Synapse.backend() instanceof CudaBackend cuda && cuda.supportsResidentRelu()) {
 			if (lastCudaResident) {
 				if (lastBatchInput == null || lastBatchOutput == null)
 					throw new IllegalStateException("Dense layer must run forward before backward");
@@ -334,6 +334,8 @@ public class DenseLayer implements Layer {
 			throw new IllegalArgumentException("Learning rate must be positive and finite");
 		if (optimizer == null)
 			throw new IllegalArgumentException("Optimizer cannot be null");
+		if (!cuda.supportsResidentRelu())
+			throw new IllegalStateException("CUDA training kernels are unavailable");
 		return cuda.denseBackwardUpdate(weights, biases, lastBatchInput, weightedGradient, optimizer, learningRate);
 	}
 
