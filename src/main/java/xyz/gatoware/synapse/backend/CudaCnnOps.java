@@ -9,10 +9,11 @@ import jcuda.nvrtc.JNvrtc;
 import jcuda.nvrtc.nvrtcProgram;
 import jcuda.runtime.JCuda;
 import jcuda.runtime.cudaMemcpyKind;
+import xyz.gatoware.synapse.Synapse;
 import xyz.gatoware.synapse.matrix.Matrix;
 import xyz.gatoware.synapse.optimizer.Optimizer;
 
-/** CUDA kernels for convolution and pooling layers. */
+/** Internal CUDA kernels used by convolution and pooling layers. */
 public final class CudaCnnOps {
 	private static final int BLOCK_SIZE = 256;
 
@@ -241,7 +242,9 @@ public final class CudaCnnOps {
 
 	private CudaCnnOps() { }
 
-	/** Returns whether the CUDA CNN kernels are available. */
+	/** Checks whether Synapse's CUDA CNN kernels can be compiled and loaded.
+	 * @return true when the CUDA CNN kernels are available
+	 */
 	public static synchronized boolean isAvailable() {
 		if (!attempted) initialize();
 		return available;
@@ -288,7 +291,22 @@ public final class CudaCnnOps {
 		return result;
 	}
 
-	/** Runs a batched ReLU convolution on CUDA. */
+	/** Runs a batched ReLU convolution on CUDA.
+	 * @param input flattened channel-first input matrix
+	 * @param kernels convolution kernels
+	 * @param biases filter biases
+	 * @param inW input width
+	 * @param inH input height
+	 * @param inC input channels
+	 * @param filters filter count
+	 * @param kernelSize square kernel size
+	 * @param stride convolution stride
+	 * @param outW output width
+	 * @param outH output height
+	 * @param padLeft left padding
+	 * @param padTop top padding
+	 * @return convolution output
+	 */
 	public static Matrix convReluForward(Matrix input, Matrix kernels, Matrix biases,
 			int inW, int inH, int inC, int filters, int kernelSize, int stride,
 			int outW, int outH, int padLeft, int padTop) {
@@ -310,7 +328,26 @@ public final class CudaCnnOps {
 		}
 	}
 
-	/** Runs convolution backpropagation and parameter updates on CUDA. */
+	/** Runs ReLU convolution backpropagation and parameter updates on CUDA.
+	 * @param input input from the matching forward pass
+	 * @param output ReLU output from the matching forward pass
+	 * @param outputGradient gradient at the convolution output
+	 * @param kernels convolution kernels
+	 * @param biases filter biases
+	 * @param inW input width
+	 * @param inH input height
+	 * @param inC input channels
+	 * @param filters filter count
+	 * @param kernelSize square kernel size
+	 * @param stride convolution stride
+	 * @param outW output width
+	 * @param outH output height
+	 * @param padLeft left padding
+	 * @param padTop top padding
+	 * @param optimizer optimizer used to update kernels and biases
+	 * @param learningRate training learning rate
+	 * @return gradient with respect to the convolution input
+	 */
 	public static Matrix convReluBackwardUpdate(Matrix input, Matrix output, Matrix outputGradient,
 			Matrix kernels, Matrix biases, int inW, int inH, int inC, int filters,
 			int kernelSize, int stride, int outW, int outH, int padLeft, int padTop,
@@ -333,16 +370,13 @@ public final class CudaCnnOps {
 				Pointer.to(dInputGradient), intArg(inW), intArg(inH), intArg(inC), intArg(filters),
 				intArg(kernelSize), intArg(stride), intArg(outW), intArg(outH), intArg(padLeft), intArg(padTop), intArg(batch));
 			launch(convInputGradient, outputRows * batch, inputParams);
-
 			Pointer kernelParams = Pointer.to(Pointer.to(dInput), Pointer.to(dOutput), Pointer.to(dOutputGradient),
 				Pointer.to(dKernelGradient), intArg(inW), intArg(inH), intArg(inC), intArg(filters),
 				intArg(kernelSize), intArg(stride), intArg(outW), intArg(outH), intArg(padLeft), intArg(padTop), intArg(batch));
 			launch(convKernelGradient, filters * kernelValues, kernelParams);
-
 			Pointer biasParams = Pointer.to(Pointer.to(dOutput), Pointer.to(dOutputGradient), Pointer.to(dBiasGradient),
 				intArg(filters), intArg(outW), intArg(outH), intArg(batch));
 			launch(convBiasGradient, filters, biasParams);
-
 			Matrix kernelGradient = download(dKernelGradient, filters, kernelValues);
 			Matrix biasGradient = download(dBiasGradient, filters, 1);
 			Matrix inputGradient = download(dInputGradient, inputRows, batch);
@@ -356,13 +390,34 @@ public final class CudaCnnOps {
 		}
 	}
 
-	/** Runs batched max pooling on CUDA. */
+	/** Runs batched max pooling on CUDA.
+	 * @param input flattened channel-first input matrix
+	 * @param inW input width
+	 * @param inH input height
+	 * @param channels channel count
+	 * @param pool pooling window size
+	 * @param stride pooling stride
+	 * @param outW output width
+	 * @param outH output height
+	 * @return pooled output
+	 */
 	public static Matrix maxPoolForward(Matrix input, int inW, int inH, int channels,
 			int pool, int stride, int outW, int outH) {
 		return poolForward(input, inW, inH, channels, pool, stride, outW, outH, true);
 	}
 
-	/** Runs max-pooling backpropagation on CUDA. */
+	/** Runs max-pooling backpropagation on CUDA.
+	 * @param input input from the matching forward pass
+	 * @param outputGradient gradient at the pooling output
+	 * @param inW input width
+	 * @param inH input height
+	 * @param channels channel count
+	 * @param pool pooling window size
+	 * @param stride pooling stride
+	 * @param outW output width
+	 * @param outH output height
+	 * @return gradient with respect to the pooling input
+	 */
 	public static Matrix maxPoolBackward(Matrix input, Matrix outputGradient, int inW, int inH, int channels,
 			int pool, int stride, int outW, int outH) {
 		requireAvailable();
@@ -383,13 +438,33 @@ public final class CudaCnnOps {
 		}
 	}
 
-	/** Runs batched average pooling on CUDA. */
+	/** Runs batched average pooling on CUDA.
+	 * @param input flattened channel-first input matrix
+	 * @param inW input width
+	 * @param inH input height
+	 * @param channels channel count
+	 * @param pool pooling window size
+	 * @param stride pooling stride
+	 * @param outW output width
+	 * @param outH output height
+	 * @return pooled output
+	 */
 	public static Matrix avgPoolForward(Matrix input, int inW, int inH, int channels,
 			int pool, int stride, int outW, int outH) {
 		return poolForward(input, inW, inH, channels, pool, stride, outW, outH, false);
 	}
 
-	/** Runs average-pooling backpropagation on CUDA. */
+	/** Runs average-pooling backpropagation on CUDA.
+	 * @param outputGradient gradient at the pooling output
+	 * @param inW input width
+	 * @param inH input height
+	 * @param channels channel count
+	 * @param pool pooling window size
+	 * @param stride pooling stride
+	 * @param outW output width
+	 * @param outH output height
+	 * @return gradient with respect to the pooling input
+	 */
 	public static Matrix avgPoolBackward(Matrix outputGradient, int inW, int inH, int channels,
 			int pool, int stride, int outW, int outH) {
 		requireAvailable();
@@ -431,6 +506,7 @@ public final class CudaCnnOps {
 	}
 
 	private static Pointer upload(Matrix matrix) {
+		if (Synapse.backend() instanceof CudaBackend cuda) cuda.materialize(matrix);
 		float[] values = new float[matrix.rows() * matrix.columns()];
 		for (int row = 0; row < matrix.rows(); row++)
 			System.arraycopy(matrix.values[row], 0, values, row * matrix.columns(), matrix.columns());
@@ -456,9 +532,7 @@ public final class CudaCnnOps {
 		return pointer;
 	}
 
-	private static Pointer intArg(int value) {
-		return Pointer.to(new int[] {value});
-	}
+	private static Pointer intArg(int value) { return Pointer.to(new int[] {value}); }
 
 	private static void launch(CUfunction function, int count, Pointer params) {
 		int blocks = (count + BLOCK_SIZE - 1) / BLOCK_SIZE;
@@ -466,7 +540,6 @@ public final class CudaCnnOps {
 	}
 
 	private static void free(Pointer... pointers) {
-		for (Pointer pointer : pointers)
-			if (pointer != null) JCuda.cudaFree(pointer);
+		for (Pointer pointer : pointers) if (pointer != null) JCuda.cudaFree(pointer);
 	}
 }
