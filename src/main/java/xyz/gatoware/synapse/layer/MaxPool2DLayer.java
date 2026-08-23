@@ -15,10 +15,23 @@ public class MaxPool2DLayer implements Layer {
 	private int[][] lastMaxIndices;
 	private int lastBatchSize;
 
+	/** Creates a max-pooling layer whose stride matches the pooling size.
+	 * @param inputWidth width of each input image or feature map
+	 * @param inputHeight height of each input image or feature map
+	 * @param channels number of input channels
+	 * @param poolSize width and height of each square pooling region
+	 */
 	public MaxPool2DLayer(int inputWidth, int inputHeight, int channels, int poolSize) {
 		this(inputWidth, inputHeight, channels, poolSize, poolSize);
 	}
 
+	/** Creates a max-pooling layer.
+	 * @param inputWidth width of each input image or feature map
+	 * @param inputHeight height of each input image or feature map
+	 * @param channels number of input channels
+	 * @param poolSize width and height of each square pooling region
+	 * @param stride number of pixels the pooling region moves each step
+	 */
 	public MaxPool2DLayer(int inputWidth, int inputHeight, int channels, int poolSize, int stride) {
 		validate(inputWidth, inputHeight, channels, poolSize, stride);
 		this.inputWidth = inputWidth;
@@ -110,11 +123,38 @@ public class MaxPool2DLayer implements Layer {
 			throw new IllegalArgumentException("Pooling input or output is too large");
 	}
 
+	/** Returns the input width.
+	 * @return the input width
+	 */
 	public int getInputWidth() { return inputWidth; }
+
+	/** Returns the input height.
+	 * @return the input height
+	 */
 	public int getInputHeight() { return inputHeight; }
+
+	/** Returns the number of channels.
+	 * @return the number of channels
+	 */
 	public int getChannels() { return channels; }
+
+	/** Returns the pooling-region size.
+	 * @return the pooling-region size
+	 */
 	public int getPoolSize() { return poolSize; }
+
+	/** Returns the pooling stride.
+	 * @return the pooling stride
+	 */
 	public int getStride() { return stride; }
+
+	/** Returns the output width.
+	 * @return the output width
+	 */
 	public int getOutputWidth() { return outputWidth; }
+
+	/** Returns the output height.
+	 * @return the output height
+	 */
 	public int getOutputHeight() { return outputHeight; }
 }
