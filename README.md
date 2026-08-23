@@ -69,7 +69,7 @@ The final `DenseLayer` can use the result directly.
 new Conv2DLayer(28, 28, 1, 32, 3, 2, Padding.SAME, new ReLU());
 ```
 
-- `Padding.VALID` means no padding.
+- `Padding.NONE` means no padding.
 - `Padding.SAME` adds empty space around the image so the output size is preserved when stride is 1.
 
 Images can be loaded into a `Matrix` and saved again with `Images`:
