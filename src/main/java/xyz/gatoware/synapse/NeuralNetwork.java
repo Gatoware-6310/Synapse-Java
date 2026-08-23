@@ -22,6 +22,7 @@ import xyz.gatoware.synapse.activation.Softmax;
 import xyz.gatoware.synapse.activation.Swish;
 import xyz.gatoware.synapse.activation.Tanh;
 import xyz.gatoware.synapse.backend.CudaBackend;
+import xyz.gatoware.synapse.backend.CudaCnnOps;
 import xyz.gatoware.synapse.dataset.Dataset;
 import xyz.gatoware.synapse.layer.AvgPool2DLayer;
 import xyz.gatoware.synapse.layer.Conv2DLayer;
@@ -155,6 +156,12 @@ public class NeuralNetwork {
 		for (Layer layer : layers)
 			output = layer.forward(output);
 		return output;
+	}
+
+	private Matrix forwardCudaTrainingLayer(Layer layer, Matrix input) {
+		if (layer instanceof DenseLayer dense)
+			return dense.forwardCudaResident(input);
+		return layer.forward(input);
 	}
 
 	/** Trains the network with a custom loss function and the default Adam optimizer.
@@ -313,7 +320,7 @@ public class NeuralNetwork {
 		}
 	}
 
-	/** CUDA training keeps the standard Dense/ReLU/Softmax classifier path on the GPU.
+	/** CUDA training keeps supported Dense/CNN classifier layers resident on the GPU.
 	 * For Softmax + SparseCategoricalCrossEntropy, the final affine transform, bias,
 	 * stable Softmax, cross-entropy derivative, final-layer backward, and optimizer
 	 * update are fused into the CUDA backend without materializing probabilities.
@@ -346,7 +353,7 @@ public class NeuralNetwork {
 					if (fusedSoftmaxCrossEntropy) {
 						Matrix hiddenOutput = batchInput;
 						for (int layerIndex = 0; layerIndex < finalLayerIndex; layerIndex++)
-							hiddenOutput = ((DenseLayer) layers.get(layerIndex)).forwardCudaResident(hiddenOutput);
+							hiddenOutput = forwardCudaTrainingLayer(layers.get(layerIndex), hiddenOutput);
 
 						int[] targets = new int[batchSize];
 						for (int sample = 0; sample < batchSize; sample++) {
@@ -370,11 +377,11 @@ public class NeuralNetwork {
 					} else {
 						Matrix output = batchInput;
 						for (int layerIndex = 0; layerIndex < layers.size(); layerIndex++) {
-							DenseLayer dense = (DenseLayer) layers.get(layerIndex);
+							Layer layer = layers.get(layerIndex);
 							if (layerIndex < finalLayerIndex)
-								output = dense.forwardCudaResident(output);
+								output = forwardCudaTrainingLayer(layer, output);
 							else
-								output = dense.forward(output);
+								output = layer.forward(output);
 						}
 
 						Matrix outputGradient = new Matrix(output.rows(), batchSize);
@@ -408,19 +415,40 @@ public class NeuralNetwork {
 	private boolean canUseCudaTraining() {
 		if (!(Synapse.backend() instanceof CudaBackend) || layers.isEmpty())
 			return false;
-		for (int i = 0; i < layers.size(); i++) {
-			if (!(layers.get(i) instanceof DenseLayer dense))
-				return false;
-			if (i < layers.size() - 1 && !dense.canForwardCudaResident())
-				return false;
+		if (!(layers.get(layers.size() - 1) instanceof DenseLayer))
+			return false;
+		boolean cnnKernelsAvailable = false;
+		for (int i = 0; i < layers.size() - 1; i++) {
+			Layer layer = layers.get(i);
+			if (layer instanceof DenseLayer dense) {
+				if (!dense.canForwardCudaResident()) return false;
+				continue;
+			}
+			if (layer instanceof Conv2DLayer conv) {
+				if (!(conv.getActivationFunction() instanceof ReLU)) return false;
+				if (!cnnKernelsAvailable) cnnKernelsAvailable = CudaCnnOps.isAvailable();
+				if (!cnnKernelsAvailable) return false;
+				continue;
+			}
+			if (layer instanceof MaxPool2DLayer || layer instanceof AvgPool2DLayer) {
+				if (!cnnKernelsAvailable) cnnKernelsAvailable = CudaCnnOps.isAvailable();
+				if (!cnnKernelsAvailable) return false;
+				continue;
+			}
+			return false;
 		}
 		return true;
 	}
 
 	private void materializeCudaParameters() {
-		for (Layer layer : layers)
-			if (layer instanceof DenseLayer dense)
+		for (Layer layer : layers) {
+			if (layer instanceof DenseLayer dense) {
 				dense.materializeParameters();
+			} else if (layer instanceof Conv2DLayer conv) {
+				conv.getKernels();
+				conv.getBiases();
+			}
+		}
 	}
 
 	private static int[] makeOrder(int size) {
@@ -549,6 +577,8 @@ public class NeuralNetwork {
 	 */
 	public int predict(Matrix input) {
 		Matrix output = forward(input);
+		if (Synapse.backend() instanceof CudaBackend cuda)
+			cuda.materialize(output);
 		if (output.rows() == 0 || output.columns() == 0 || (output.rows() != 1 && output.columns() != 1))
 			throw new IllegalStateException("Network output must be a non-empty vector");
 
@@ -574,12 +604,45 @@ public class NeuralNetwork {
 			throw new IllegalArgumentException("Dataset cannot be null");
 		if (dataset.size() == 0)
 			throw new IllegalArgumentException("Dataset cannot be empty");
+		if (Synapse.backend() instanceof CudaBackend)
+			return accuracyBatched(dataset, Math.max(1, Synapse.getCudaBatchSize()));
 
 		int correct = 0;
 		for (int i = 0; i < dataset.size(); i++) {
 			int target = (int) dataset.getTarget(i).values[0][0];
 			if (predict(dataset.getInput(i)) == target)
 				correct++;
+		}
+		return (float) correct / dataset.size();
+	}
+
+	private float accuracyBatched(Dataset dataset, int batchSize) {
+		int correct = 0;
+		int featureCount = dataset.getInputs().columns();
+		for (int start = 0; start < dataset.size(); start += batchSize) {
+			int currentBatchSize = Math.min(batchSize, dataset.size() - start);
+			Matrix batchInput = new Matrix(featureCount, currentBatchSize);
+			for (int sample = 0; sample < currentBatchSize; sample++) {
+				int index = start + sample;
+				for (int feature = 0; feature < featureCount; feature++)
+					batchInput.values[feature][sample] = dataset.getInputs().values[index][feature];
+			}
+			Matrix output = forward(batchInput);
+			if (Synapse.backend() instanceof CudaBackend cuda)
+				cuda.materialize(output);
+			for (int sample = 0; sample < currentBatchSize; sample++) {
+				int prediction = 0;
+				float highest = output.values[0][sample];
+				for (int neuron = 1; neuron < output.rows(); neuron++) {
+					float value = output.values[neuron][sample];
+					if (value > highest) {
+						highest = value;
+						prediction = neuron;
+					}
+				}
+				int target = (int) dataset.getTargets().values[start + sample][0];
+				if (prediction == target) correct++;
+			}
 		}
 		return (float) correct / dataset.size();
 	}
