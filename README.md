@@ -22,6 +22,26 @@ NeuralNetwork defined = new NeuralNetwork(new Layer[] {
 NeuralNetwork simple = new NeuralNetwork(784, 128, 2, 10);
 ```
 
+## Convolutional networks
+CNN layers use the same `Matrix` and `NeuralNetwork` APIs as dense layers. Image data is flattened channel-first (`channel -> y -> x`), with one sample per matrix column.
+
+```java
+NeuralNetwork cnn = new NeuralNetwork(new Layer[] {
+	new Conv2DLayer(28, 28, 1, 32, 3, new ReLU()),
+	new MaxPool2DLayer(26, 26, 32, 2),
+	new DenseLayer(13 * 13 * 32, 10, new Softmax())
+});
+```
+
+`Conv2DLayer` supports configurable stride and `Padding.VALID` / `Padding.SAME`. `MaxPool2DLayer` and `AvgPool2DLayer` provide spatial pooling. No flatten layer is needed because CNN outputs remain flattened matrices.
+
+Images can be converted to normalized matrices with `Images`:
+
+```java
+Matrix image = Images.load("image.png", 224, 224);
+Images.save(image, 224, 224, 3, "output.png");
+```
+
 ## Datasets
 Currently, CSV datasets are supported by Synapse, following this format:
 
@@ -149,6 +169,15 @@ The most recent average loss is also available after training with `getLastLoss(
 System.out.println("Final loss: " + network.getLastLoss());
 ```
 
+## Input gradients
+`forwardTo` returns the activations at a zero-based layer index. `inputGradient` backpropagates from that layer to the input without updating model parameters, enabling techniques such as DeepDream and saliency maps.
+
+```java
+Matrix activation = network.forwardTo(image, 4);
+Matrix gradient = network.inputGradient(image, 4, activation.copy().multiply(2.0f));
+image.add(gradient.multiply(0.01f));
+```
+
 ## CUDA
 CUDA acceleration is optional; CPU remains the default.
 
@@ -180,3 +209,5 @@ network.save("model.snn");
 
 NeuralNetwork loadedNetwork = NeuralNetwork.load("model.snn");
 ```
+
+`.snn` version 2 stores dense, convolution, max-pooling, and average-pooling layers. Version 1 dense-only model files remain loadable.

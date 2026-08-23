@@ -23,8 +23,12 @@ import xyz.gatoware.synapse.activation.Swish;
 import xyz.gatoware.synapse.activation.Tanh;
 import xyz.gatoware.synapse.backend.CudaBackend;
 import xyz.gatoware.synapse.dataset.Dataset;
+import xyz.gatoware.synapse.layer.AvgPool2DLayer;
+import xyz.gatoware.synapse.layer.Conv2DLayer;
 import xyz.gatoware.synapse.layer.DenseLayer;
 import xyz.gatoware.synapse.layer.Layer;
+import xyz.gatoware.synapse.layer.MaxPool2DLayer;
+import xyz.gatoware.synapse.layer.Padding;
 import xyz.gatoware.synapse.loss.LossFunction;
 import xyz.gatoware.synapse.loss.SparseCategoricalCrossEntropy;
 import xyz.gatoware.synapse.matrix.Matrix;
@@ -34,9 +38,14 @@ import xyz.gatoware.synapse.optimizer.Optimizer;
 /** A lightweight neural network composed of layers. */
 public class NeuralNetwork {
 	private static final int FILE_MAGIC = 0x534E4E31; // SNN1
-	private static final int FILE_VERSION = 1;
+	private static final int LEGACY_FILE_VERSION = 1;
+	private static final int FILE_VERSION = 2;
 	private static final int MAX_LAYERS = 1_000_000;
 	private static final int MAX_MATRIX_DIMENSION = 1_000_000;
+	private static final int LAYER_DENSE = 1;
+	private static final int LAYER_CONV2D = 2;
+	private static final int LAYER_MAX_POOL_2D = 3;
+	private static final int LAYER_AVG_POOL_2D = 4;
 
 	private List<Layer> layers = new ArrayList<>();
 	private float lastLoss = Float.NaN;
@@ -87,6 +96,33 @@ public class NeuralNetwork {
 				output = layer.forward(output);
 		}
 		return output;
+	}
+
+	/** Runs the input through the given zero-based layer and returns that layer's activations. */
+	public Matrix forwardTo(Matrix input, int layerIndex) {
+		validateLayerIndex(layerIndex);
+		Matrix output = input;
+		for (int i = 0; i <= layerIndex; i++)
+			output = layers.get(i).forward(output);
+		return output;
+	}
+
+	/** Returns the gradient with respect to the network input without updating parameters. */
+	public Matrix inputGradient(Matrix input, int layerIndex, Matrix gradient) {
+		Matrix activation = forwardTo(input, layerIndex);
+		if (gradient == null)
+			throw new IllegalArgumentException("Gradient cannot be null");
+		if (gradient.rows() != activation.rows() || gradient.columns() != activation.columns())
+			throw new IllegalArgumentException("Gradient dimensions must match the selected layer output");
+		Matrix result = gradient;
+		for (int i = layerIndex; i >= 0; i--)
+			result = layers.get(i).backwardInput(result);
+		return result;
+	}
+
+	private void validateLayerIndex(int layerIndex) {
+		if (layerIndex < 0 || layerIndex >= layers.size())
+			throw new IllegalArgumentException("Layer index is out of range");
 	}
 
 	private Matrix forwardTraining(Matrix input) {
@@ -448,14 +484,8 @@ public class NeuralNetwork {
 			output.writeInt(FILE_MAGIC);
 			output.writeInt(FILE_VERSION);
 			output.writeInt(layers.size());
-			for (Layer layer : layers) {
-				if (!(layer instanceof DenseLayer))
-					throw new IOException("Only DenseLayer instances can be saved");
-				DenseLayer denseLayer = (DenseLayer) layer;
-				writeMatrix(output, denseLayer.getWeights());
-				writeMatrix(output, denseLayer.getBiases());
-				writeActivation(output, denseLayer.getActivationFunction());
-			}
+			for (Layer layer : layers)
+				writeLayer(output, layer);
 		}
 	}
 
@@ -467,7 +497,8 @@ public class NeuralNetwork {
 		try (DataInputStream input = new DataInputStream(new BufferedInputStream(Files.newInputStream(path)))) {
 			if (input.readInt() != FILE_MAGIC)
 				throw new IOException("Not a Synapse neural network file");
-			if (input.readInt() != FILE_VERSION)
+			int version = input.readInt();
+			if (version != LEGACY_FILE_VERSION && version != FILE_VERSION)
 				throw new IOException("Unsupported Synapse neural network file version");
 
 			int layerCount = input.readInt();
@@ -476,14 +507,131 @@ public class NeuralNetwork {
 
 			NeuralNetwork network = new NeuralNetwork();
 			for (int i = 0; i < layerCount; i++) {
-				Matrix weights = readMatrix(input);
-				Matrix biases = readMatrix(input);
-				if (weights.rows() != biases.rows() || biases.columns() != 1)
-					throw new IOException("Invalid dense layer dimensions");
-				network.addLayer(new DenseLayer(weights, biases, readActivation(input)));
+				if (version == LEGACY_FILE_VERSION)
+					network.addLayer(readLegacyDenseLayer(input));
+				else
+					network.addLayer(readLayer(input));
 			}
 			return network;
 		}
+	}
+
+	private static void writeLayer(DataOutputStream output, Layer layer) throws IOException {
+		if (layer instanceof DenseLayer dense) {
+			output.writeByte(LAYER_DENSE);
+			writeMatrix(output, dense.getWeights());
+			writeMatrix(output, dense.getBiases());
+			writeActivation(output, dense.getActivationFunction());
+			return;
+		}
+		if (layer instanceof Conv2DLayer conv) {
+			output.writeByte(LAYER_CONV2D);
+			output.writeInt(conv.getInputWidth());
+			output.writeInt(conv.getInputHeight());
+			output.writeInt(conv.getInputChannels());
+			output.writeInt(conv.getFilters());
+			output.writeInt(conv.getKernelSize());
+			output.writeInt(conv.getStride());
+			output.writeByte(conv.getPadding() == Padding.VALID ? 0 : 1);
+			writeMatrix(output, conv.getKernels());
+			writeMatrix(output, conv.getBiases());
+			writeActivation(output, conv.getActivationFunction());
+			return;
+		}
+		if (layer instanceof MaxPool2DLayer pool) {
+			output.writeByte(LAYER_MAX_POOL_2D);
+			writePool(output, pool.getInputWidth(), pool.getInputHeight(), pool.getChannels(), pool.getPoolSize(), pool.getStride());
+			return;
+		}
+		if (layer instanceof AvgPool2DLayer pool) {
+			output.writeByte(LAYER_AVG_POOL_2D);
+			writePool(output, pool.getInputWidth(), pool.getInputHeight(), pool.getChannels(), pool.getPoolSize(), pool.getStride());
+			return;
+		}
+		throw new IOException("Unsupported layer type: " + layer.getClass().getName());
+	}
+
+	private static Layer readLayer(DataInputStream input) throws IOException {
+		switch (input.readUnsignedByte()) {
+			case LAYER_DENSE:
+				return readLegacyDenseLayer(input);
+			case LAYER_CONV2D:
+				return readConv2DLayer(input);
+			case LAYER_MAX_POOL_2D: {
+				int[] values = readPool(input);
+				try {
+					return new MaxPool2DLayer(values[0], values[1], values[2], values[3], values[4]);
+				} catch (IllegalArgumentException exception) {
+					throw new IOException("Invalid MaxPool2D layer", exception);
+				}
+			}
+			case LAYER_AVG_POOL_2D: {
+				int[] values = readPool(input);
+				try {
+					return new AvgPool2DLayer(values[0], values[1], values[2], values[3], values[4]);
+				} catch (IllegalArgumentException exception) {
+					throw new IOException("Invalid AvgPool2D layer", exception);
+				}
+			}
+			default:
+				throw new IOException("Unsupported layer type");
+		}
+	}
+
+	private static DenseLayer readLegacyDenseLayer(DataInputStream input) throws IOException {
+		Matrix weights = readMatrix(input);
+		Matrix biases = readMatrix(input);
+		if (weights.rows() != biases.rows() || biases.columns() != 1)
+			throw new IOException("Invalid dense layer dimensions");
+		return new DenseLayer(weights, biases, readActivation(input));
+	}
+
+	private static Conv2DLayer readConv2DLayer(DataInputStream input) throws IOException {
+		int inputWidth = input.readInt();
+		int inputHeight = input.readInt();
+		int inputChannels = input.readInt();
+		int filters = input.readInt();
+		int kernelSize = input.readInt();
+		int stride = input.readInt();
+		int paddingId = input.readUnsignedByte();
+		Padding padding;
+		if (paddingId == 0)
+			padding = Padding.VALID;
+		else if (paddingId == 1)
+			padding = Padding.SAME;
+		else
+			throw new IOException("Invalid convolution padding");
+		Matrix kernels = readMatrix(input);
+		Matrix biases = readMatrix(input);
+		ActivationFunction activation = readActivation(input);
+		try {
+			Conv2DLayer layer = new Conv2DLayer(inputWidth, inputHeight, inputChannels, filters, kernelSize, stride, padding, activation);
+			copyMatrix(kernels, layer.getKernels(), "convolution kernels");
+			copyMatrix(biases, layer.getBiases(), "convolution biases");
+			return layer;
+		} catch (IllegalArgumentException exception) {
+			throw new IOException("Invalid Conv2D layer", exception);
+		}
+	}
+
+	private static void writePool(DataOutputStream output, int width, int height, int channels, int poolSize, int stride)
+			throws IOException {
+		output.writeInt(width);
+		output.writeInt(height);
+		output.writeInt(channels);
+		output.writeInt(poolSize);
+		output.writeInt(stride);
+	}
+
+	private static int[] readPool(DataInputStream input) throws IOException {
+		return new int[] { input.readInt(), input.readInt(), input.readInt(), input.readInt(), input.readInt() };
+	}
+
+	private static void copyMatrix(Matrix source, Matrix target, String name) throws IOException {
+		if (source.rows() != target.rows() || source.columns() != target.columns())
+			throw new IOException("Invalid " + name + " dimensions");
+		for (int row = 0; row < source.rows(); row++)
+			System.arraycopy(source.values[row], 0, target.values[row], 0, source.columns());
 	}
 
 	private static void writeMatrix(DataOutputStream output, Matrix matrix) throws IOException {

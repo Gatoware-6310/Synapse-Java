@@ -1,0 +1,120 @@
+package xyz.gatoware.synapse.layer;
+
+import xyz.gatoware.synapse.matrix.Matrix;
+import xyz.gatoware.synapse.optimizer.Optimizer;
+
+/** A 2D max-pooling layer using flattened channel-first matrices. */
+public class MaxPool2DLayer implements Layer {
+	private final int inputWidth;
+	private final int inputHeight;
+	private final int channels;
+	private final int poolSize;
+	private final int stride;
+	private final int outputWidth;
+	private final int outputHeight;
+	private int[][] lastMaxIndices;
+	private int lastBatchSize;
+
+	public MaxPool2DLayer(int inputWidth, int inputHeight, int channels, int poolSize) {
+		this(inputWidth, inputHeight, channels, poolSize, poolSize);
+	}
+
+	public MaxPool2DLayer(int inputWidth, int inputHeight, int channels, int poolSize, int stride) {
+		validate(inputWidth, inputHeight, channels, poolSize, stride);
+		this.inputWidth = inputWidth;
+		this.inputHeight = inputHeight;
+		this.channels = channels;
+		this.poolSize = poolSize;
+		this.stride = stride;
+		this.outputWidth = (inputWidth - poolSize) / stride + 1;
+		this.outputHeight = (inputHeight - poolSize) / stride + 1;
+	}
+
+	@Override
+	public Matrix forward(Matrix input) {
+		int expectedRows = inputWidth * inputHeight * channels;
+		if (input.rows() != expectedRows || input.columns() <= 0)
+			throw new IllegalArgumentException("MaxPool2D input must have " + expectedRows + " rows");
+		int outputSize = outputWidth * outputHeight * channels;
+		lastBatchSize = input.columns();
+		lastMaxIndices = new int[outputSize][lastBatchSize];
+		Matrix output = new Matrix(outputSize, lastBatchSize);
+
+		for (int sample = 0; sample < lastBatchSize; sample++) {
+			for (int channel = 0; channel < channels; channel++) {
+				for (int outputY = 0; outputY < outputHeight; outputY++) {
+					for (int outputX = 0; outputX < outputWidth; outputX++) {
+						int firstInput = inputIndex(channel, outputY * stride, outputX * stride);
+						float max = input.values[firstInput][sample];
+						int maxIndex = firstInput;
+						for (int poolY = 0; poolY < poolSize; poolY++) {
+							for (int poolX = 0; poolX < poolSize; poolX++) {
+								int inputIndex = inputIndex(channel, outputY * stride + poolY, outputX * stride + poolX);
+								float value = input.values[inputIndex][sample];
+								if (value > max) {
+									max = value;
+									maxIndex = inputIndex;
+								}
+							}
+						}
+						int outputIndex = outputIndex(channel, outputY, outputX);
+						output.values[outputIndex][sample] = max;
+						lastMaxIndices[outputIndex][sample] = maxIndex;
+					}
+				}
+			}
+		}
+		return output;
+	}
+
+	@Override
+	public Matrix backwardInput(Matrix outputGradient) {
+		if (lastMaxIndices == null)
+			throw new IllegalStateException("MaxPool2D layer must run forward before backward");
+		int outputSize = outputWidth * outputHeight * channels;
+		if (outputGradient.rows() != outputSize || outputGradient.columns() != lastBatchSize)
+			throw new IllegalArgumentException("MaxPool2D output gradient dimensions do not match the last forward pass");
+		Matrix inputGradient = new Matrix(inputWidth * inputHeight * channels, lastBatchSize);
+		for (int output = 0; output < outputSize; output++)
+			for (int sample = 0; sample < lastBatchSize; sample++)
+				inputGradient.values[lastMaxIndices[output][sample]][sample] += outputGradient.values[output][sample];
+		return inputGradient;
+	}
+
+	@Override
+	public Matrix backward(Matrix outputGradient, float learningRate) {
+		return backwardInput(outputGradient);
+	}
+
+	@Override
+	public Matrix backward(Matrix outputGradient, float learningRate, Optimizer optimizer) {
+		return backwardInput(outputGradient);
+	}
+
+	private int inputIndex(int channel, int y, int x) {
+		return (channel * inputHeight + y) * inputWidth + x;
+	}
+
+	private int outputIndex(int channel, int y, int x) {
+		return (channel * outputHeight + y) * outputWidth + x;
+	}
+
+	private static void validate(int width, int height, int channels, int poolSize, int stride) {
+		if (width <= 0 || height <= 0 || channels <= 0 || poolSize <= 0 || stride <= 0)
+			throw new IllegalArgumentException("Pooling dimensions and stride must be positive");
+		if (poolSize > width || poolSize > height)
+			throw new IllegalArgumentException("Pool size cannot be larger than the input");
+		long inputSize = (long) width * height * channels;
+		long outputSize = (long) ((width - poolSize) / stride + 1) * ((height - poolSize) / stride + 1) * channels;
+		if (inputSize > Integer.MAX_VALUE || outputSize > Integer.MAX_VALUE)
+			throw new IllegalArgumentException("Pooling input or output is too large");
+	}
+
+	public int getInputWidth() { return inputWidth; }
+	public int getInputHeight() { return inputHeight; }
+	public int getChannels() { return channels; }
+	public int getPoolSize() { return poolSize; }
+	public int getStride() { return stride; }
+	public int getOutputWidth() { return outputWidth; }
+	public int getOutputHeight() { return outputHeight; }
+}

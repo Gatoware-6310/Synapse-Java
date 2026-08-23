@@ -126,6 +126,40 @@ public class DenseLayer implements Layer {
 	}
 
 	@Override
+	public Matrix backwardInput(Matrix outputGradient) {
+		if (lastCudaResident)
+			throw new IllegalStateException("Input gradients require a standard forward pass");
+		materializeParameters();
+
+		if (lastForwardWasBatch) {
+			if (lastBatchInput == null || lastBatchWeighted == null || lastBatchOutput == null)
+				throw new IllegalStateException("Dense layer must run forward before backward");
+			if (outputGradient.rows() != weights.rows() || outputGradient.columns() != lastBatchInput.columns())
+				throw new IllegalArgumentException("Dense layer output gradient dimensions do not match the last forward pass");
+			return inputGradientFromWeighted(activationBackwardBatch(outputGradient), lastBatchInput.columns());
+		}
+
+		if (lastInput == null)
+			throw new IllegalStateException("Dense layer must run forward before backward");
+		if (outputGradient.rows() != weights.rows() || outputGradient.columns() != 1)
+			throw new IllegalArgumentException("Dense layer output gradient must have dimensions " + weights.rows() + " x 1");
+
+		for (int i = 0; i < weights.rows(); i++) {
+			weightedInputValues[i] = lastWeightedInput.values[i][0];
+			outputValues[i] = lastOutput.values[i][0];
+			outputGradientValues[i] = outputGradient.values[i][0];
+		}
+		activationFunction.backward(weightedInputValues, outputValues, outputGradientValues, weightedGradient);
+		Matrix inputGradient = new Matrix(weights.columns(), 1);
+		for (int neuron = 0; neuron < weights.rows(); neuron++) {
+			float gradient = weightedGradient[neuron];
+			for (int input = 0; input < weights.columns(); input++)
+				inputGradient.values[input][0] += weights.values[neuron][input] * gradient;
+		}
+		return inputGradient;
+	}
+
+	@Override
 	public Matrix backward(Matrix outputGradient, float learningRate) {
 		return backward(outputGradient, learningRate, new SGD());
 	}
@@ -248,6 +282,17 @@ public class DenseLayer implements Layer {
 				weightedGradients.values[neuron][sample] = result[neuron];
 		}
 		return weightedGradients;
+	}
+
+	private Matrix inputGradientFromWeighted(Matrix weightedGradients, int batch) {
+		Matrix inputGradient = new Matrix(weights.columns(), batch);
+		for (int neuron = 0; neuron < weights.rows(); neuron++)
+			for (int sample = 0; sample < batch; sample++) {
+				float gradient = weightedGradients.values[neuron][sample];
+				for (int input = 0; input < weights.columns(); input++)
+					inputGradient.values[input][sample] += weights.values[neuron][input] * gradient;
+			}
+		return inputGradient;
 	}
 
 	/**
