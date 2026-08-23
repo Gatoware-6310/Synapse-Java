@@ -1,5 +1,8 @@
 package xyz.gatoware.synapse.layer;
 
+import xyz.gatoware.synapse.Synapse;
+import xyz.gatoware.synapse.backend.CudaBackend;
+import xyz.gatoware.synapse.backend.CudaCnnOps;
 import xyz.gatoware.synapse.matrix.Matrix;
 import xyz.gatoware.synapse.optimizer.Optimizer;
 
@@ -13,6 +16,7 @@ public class AvgPool2DLayer implements Layer {
 	private final int outputWidth;
 	private final int outputHeight;
 	private int lastBatchSize;
+	private boolean lastForwardCuda;
 
 	/** Creates an average-pooling layer whose stride matches the pooling size.
 	 * @param inputWidth width of each input image or feature map
@@ -48,9 +52,15 @@ public class AvgPool2DLayer implements Layer {
 		if (input.rows() != expectedRows || input.columns() <= 0)
 			throw new IllegalArgumentException("AvgPool2D input must have " + expectedRows + " rows");
 		lastBatchSize = input.columns();
+		if (canUseCuda()) {
+			lastForwardCuda = true;
+			return CudaCnnOps.avgPoolForward(input, inputWidth, inputHeight, channels,
+				poolSize, stride, outputWidth, outputHeight);
+		}
+
+		lastForwardCuda = false;
 		Matrix output = new Matrix(outputWidth * outputHeight * channels, lastBatchSize);
 		float divisor = poolSize * poolSize;
-
 		for (int sample = 0; sample < lastBatchSize; sample++) {
 			for (int channel = 0; channel < channels; channel++) {
 				for (int outputY = 0; outputY < outputHeight; outputY++) {
@@ -58,7 +68,8 @@ public class AvgPool2DLayer implements Layer {
 						float sum = 0.0f;
 						for (int poolY = 0; poolY < poolSize; poolY++)
 							for (int poolX = 0; poolX < poolSize; poolX++)
-								sum += input.values[inputIndex(channel, outputY * stride + poolY, outputX * stride + poolX)][sample];
+								sum += input.values[inputIndex(channel, outputY * stride + poolY,
+									outputX * stride + poolX)][sample];
 						output.values[outputIndex(channel, outputY, outputX)][sample] = sum / divisor;
 					}
 				}
@@ -74,6 +85,10 @@ public class AvgPool2DLayer implements Layer {
 		int outputSize = outputWidth * outputHeight * channels;
 		if (outputGradient.rows() != outputSize || outputGradient.columns() != lastBatchSize)
 			throw new IllegalArgumentException("AvgPool2D output gradient dimensions do not match the last forward pass");
+		if (lastForwardCuda && canUseCuda())
+			return CudaCnnOps.avgPoolBackward(outputGradient, inputWidth, inputHeight, channels,
+				poolSize, stride, outputWidth, outputHeight);
+
 		Matrix inputGradient = new Matrix(inputWidth * inputHeight * channels, lastBatchSize);
 		float divisor = poolSize * poolSize;
 		for (int sample = 0; sample < lastBatchSize; sample++) {
@@ -83,7 +98,8 @@ public class AvgPool2DLayer implements Layer {
 						float gradient = outputGradient.values[outputIndex(channel, outputY, outputX)][sample] / divisor;
 						for (int poolY = 0; poolY < poolSize; poolY++)
 							for (int poolX = 0; poolX < poolSize; poolX++)
-								inputGradient.values[inputIndex(channel, outputY * stride + poolY, outputX * stride + poolX)][sample] += gradient;
+								inputGradient.values[inputIndex(channel, outputY * stride + poolY,
+									outputX * stride + poolX)][sample] += gradient;
 					}
 				}
 			}
@@ -99,6 +115,10 @@ public class AvgPool2DLayer implements Layer {
 	@Override
 	public Matrix backward(Matrix outputGradient, float learningRate, Optimizer optimizer) {
 		return backwardInput(outputGradient);
+	}
+
+	private boolean canUseCuda() {
+		return Synapse.backend() instanceof CudaBackend && CudaCnnOps.isAvailable();
 	}
 
 	private int inputIndex(int channel, int y, int x) {
@@ -124,32 +144,26 @@ public class AvgPool2DLayer implements Layer {
 	 * @return the input width
 	 */
 	public int getInputWidth() { return inputWidth; }
-
 	/** Returns the input height.
 	 * @return the input height
 	 */
 	public int getInputHeight() { return inputHeight; }
-
 	/** Returns the number of channels.
 	 * @return the number of channels
 	 */
 	public int getChannels() { return channels; }
-
 	/** Returns the pooling-region size.
 	 * @return the pooling-region size
 	 */
 	public int getPoolSize() { return poolSize; }
-
 	/** Returns the pooling stride.
 	 * @return the pooling stride
 	 */
 	public int getStride() { return stride; }
-
 	/** Returns the output width.
 	 * @return the output width
 	 */
 	public int getOutputWidth() { return outputWidth; }
-
 	/** Returns the output height.
 	 * @return the output height
 	 */
