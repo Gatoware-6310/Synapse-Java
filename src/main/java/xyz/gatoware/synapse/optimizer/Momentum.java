@@ -12,13 +12,21 @@ public class Momentum implements Optimizer {
 	private final float momentum;
 	private final Map<Matrix, Matrix> velocities = new IdentityHashMap<>();
 
+	/** Creates a momentum optimizer with the default momentum value. */
 	public Momentum() { this(0.9f); }
+
+	/** Creates a momentum optimizer.
+	 * @param momentum fraction of the previous update carried into the next update
+	 */
 	public Momentum(float momentum) {
 		if (!Float.isFinite(momentum) || momentum < 0.0f || momentum >= 1.0f)
 			throw new IllegalArgumentException("Momentum must be finite and in [0, 1)");
 		this.momentum = momentum;
 	}
 
+	/** Returns the momentum value.
+	 * @return the momentum value
+	 */
 	public float getMomentum() { return momentum; }
 
 	@Override
