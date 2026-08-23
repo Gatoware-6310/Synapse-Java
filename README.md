@@ -47,7 +47,7 @@ means:
 
 - `28, 28` - the image width and height
 - `1` - the number of color channels (`1` for grayscale, `3` for RGB)
-- `32` - the number of filters the layer learns
+- `32` - the number of filters the layer learns (a filter being a small pattern detector that slides across the image)
 - `3` - each filter looks at a 3x3 part of the image
 - `new ReLU()` - the activation function
 
@@ -63,7 +63,7 @@ reduces each 26x26 result to 13x13 by taking the largest value from each 2x2 are
 
 The final `DenseLayer` can use the result directly. No `FlattenLayer` is needed.
 
-`Conv2DLayer` also supports stride and padding:
+`Conv2DLayer` also supports stride and padding. Stride is how many pixels the filter moves each time; a stride of `1` moves one pixel at a time, while a stride of `2` moves two pixels at a time.
 
 ```java
 new Conv2DLayer(28, 28, 1, 32, 3, 2, Padding.SAME, new ReLU());
