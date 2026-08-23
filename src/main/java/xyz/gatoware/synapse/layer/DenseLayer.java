@@ -64,6 +64,12 @@ public class DenseLayer implements Layer {
 		if (input.rows() != weights.columns() || input.columns() <= 0)
 			throw new IllegalArgumentException("Dense layer input must have " + weights.columns() + " rows");
 
+		if (activationFunction instanceof ReLU
+				&& Synapse.backend() instanceof CudaBackend cuda
+				&& cuda.isResident(input)
+				&& cuda.supportsResidentRelu())
+			return forwardCudaResidentInternal(input, cuda);
+
 		int inputSize = weights.columns();
 		int outputSize = weights.rows();
 		int batchSize = input.columns();
@@ -133,6 +139,10 @@ public class DenseLayer implements Layer {
 			return forward(input);
 		if (input.rows() != weights.columns() || input.columns() <= 0)
 			throw new IllegalArgumentException("Dense layer input must have " + weights.columns() + " rows");
+		return forwardCudaResidentInternal(input, cuda);
+	}
+
+	private Matrix forwardCudaResidentInternal(Matrix input, CudaBackend cuda) {
 		Matrix result = cuda.denseReluResident(weights, biases, input);
 		lastForwardWasBatch = true;
 		lastCudaResident = true;
