@@ -1,4 +1,4 @@
-# Synapse 0.1.2
+# Synapse 0.2.0
 
 Synapse is a lightweight Neural Network library in both C and Java, this repo containing the Java version.
 
@@ -156,7 +156,7 @@ CUDA acceleration is optional; CPU remains the default.
 Synapse.useDevice(Devices.CUDA);
 ```
 
-Synapse 0.1.2 supports CUDA **12.0 through 12.9**.
+Synapse 0.2.0 supports CUDA **12.0 through 12.9**.
 
 If you directly modify `Matrix.values` after that matrix has been used on CUDA, call `matrix.markDirty()` before using it on CUDA again. For example,
 
