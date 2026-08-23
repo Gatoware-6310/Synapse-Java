@@ -4,6 +4,10 @@ import xyz.gatoware.synapse.matrix.Matrix;
 
 /** Stochastic gradient descent optimizer. */
 public class SGD implements Optimizer {
+	/** Creates a stochastic gradient descent optimizer. */
+	public SGD() {
+	}
+
 	@Override
 	public void update(Matrix parameters, Matrix gradients, float learningRate) {
 		validate(parameters, gradients, learningRate);
