@@ -12,13 +12,21 @@ public class AdaGrad implements Optimizer {
 	private final float epsilon;
 	private final Map<Matrix, Matrix> squaredGradients = new IdentityHashMap<>();
 
+	/** Creates an AdaGrad optimizer with the default epsilon value. */
 	public AdaGrad() { this(1e-7f); }
+
+	/** Creates an AdaGrad optimizer.
+	 * @param epsilon small positive value used to avoid division by zero
+	 */
 	public AdaGrad(float epsilon) {
 		if (!Float.isFinite(epsilon) || epsilon <= 0.0f)
 			throw new IllegalArgumentException("Epsilon must be positive and finite");
 		this.epsilon = epsilon;
 	}
 
+	/** Returns the epsilon value used by this optimizer.
+	 * @return the epsilon value
+	 */
 	public float getEpsilon() { return epsilon; }
 
 	@Override
