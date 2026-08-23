@@ -13,7 +13,13 @@ public class RMSProp implements Optimizer {
 	private final float epsilon;
 	private final Map<Matrix, Matrix> squaredAverages = new IdentityHashMap<>();
 
+	/** Creates an RMSProp optimizer with the default decay and epsilon values. */
 	public RMSProp() { this(0.9f, 1e-7f); }
+
+	/** Creates an RMSProp optimizer.
+	 * @param decay decay rate for the moving average of squared gradients
+	 * @param epsilon small positive value used to avoid division by zero
+	 */
 	public RMSProp(float decay, float epsilon) {
 		if (!Float.isFinite(decay) || decay < 0.0f || decay >= 1.0f)
 			throw new IllegalArgumentException("Decay must be finite and in [0, 1)");
@@ -23,7 +29,14 @@ public class RMSProp implements Optimizer {
 		this.epsilon = epsilon;
 	}
 
+	/** Returns the decay rate.
+	 * @return the decay rate
+	 */
 	public float getDecay() { return decay; }
+
+	/** Returns the epsilon value used by this optimizer.
+	 * @return the epsilon value
+	 */
 	public float getEpsilon() { return epsilon; }
 
 	@Override
