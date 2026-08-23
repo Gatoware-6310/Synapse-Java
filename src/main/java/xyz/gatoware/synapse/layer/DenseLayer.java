@@ -31,6 +31,11 @@ public class DenseLayer implements Layer {
 	private Matrix lastBatchWeighted;
 	private Matrix lastBatchOutput;
 
+	/** Creates a dense layer with randomly initialized weights and zero biases.
+	 * @param inputSize number of input values
+	 * @param outputSize number of output neurons
+	 * @param activationFunction activation function applied to the layer output
+	 */
 	public DenseLayer(int inputSize, int outputSize, ActivationFunction activationFunction) {
 		this.activationFunction = activationFunction;
 		this.weights = new Matrix(outputSize, inputSize);
@@ -41,6 +46,11 @@ public class DenseLayer implements Layer {
 				this.weights.values[i][j] = (float) ((Math.random() * 2 - 1) * scale);
 	}
 
+	/** Creates a dense layer from existing parameters.
+	 * @param weights weight matrix, with one row per output neuron
+	 * @param biases bias column vector, with one value per output neuron
+	 * @param activationFunction activation function applied to the layer output
+	 */
 	public DenseLayer(Matrix weights, Matrix biases, ActivationFunction activationFunction) {
 		if (weights.rows() != biases.rows() || biases.columns() != 1)
 			throw new IllegalArgumentException("Dense layer biases must have dimensions " + weights.rows() + " x 1");
@@ -103,12 +113,19 @@ public class DenseLayer implements Layer {
 		return lastOutput.copy();
 	}
 
+	/** Returns whether this layer can use the resident CUDA ReLU fast path.
+	 * @return true when the active backend and activation support resident CUDA execution
+	 */
 	public boolean canForwardCudaResident() {
 		return activationFunction instanceof ReLU
 			&& Synapse.backend() instanceof CudaBackend cuda
 			&& cuda.supportsResidentRelu();
 	}
 
+	/** Runs the dense ReLU forward pass while keeping compatible values resident on CUDA.
+	 * @param input input matrix
+	 * @return the layer output
+	 */
 	public Matrix forwardCudaResident(Matrix input) {
 		if (!(activationFunction instanceof ReLU))
 			throw new IllegalStateException("Resident CUDA forward currently supports ReLU layers only");
@@ -300,6 +317,11 @@ public class DenseLayer implements Layer {
 	 * this layer's pre-activation logits. This is especially useful for the
 	 * mathematically fused Softmax + cross-entropy derivative (probabilities - one-hot),
 	 * avoiding the full Softmax Jacobian on the CPU.
+	 *
+	 * @param weightedGradient gradient with respect to this layer's pre-activation values
+	 * @param learningRate training learning rate
+	 * @param optimizer optimizer used to update the weights and biases
+	 * @return the gradient with respect to this layer's input
 	 */
 	public Matrix backwardCudaPreactivated(Matrix weightedGradient, float learningRate, Optimizer optimizer) {
 		if (!(Synapse.backend() instanceof CudaBackend cuda))
@@ -315,6 +337,7 @@ public class DenseLayer implements Layer {
 		return cuda.denseBackwardUpdate(weights, biases, lastBatchInput, weightedGradient, optimizer, learningRate);
 	}
 
+	/** Copies CUDA-resident weights and biases back to their host matrices when needed. */
 	public void materializeParameters() {
 		if (Synapse.backend() instanceof CudaBackend cuda) {
 			cuda.materialize(weights);
@@ -339,7 +362,18 @@ public class DenseLayer implements Layer {
 		}
 	}
 
+	/** Returns this layer's weight matrix.
+	 * @return the weight matrix
+	 */
 	public Matrix getWeights() { return weights; }
+
+	/** Returns this layer's bias vector.
+	 * @return the bias vector
+	 */
 	public Matrix getBiases() { return biases; }
+
+	/** Returns this layer's activation function.
+	 * @return the activation function
+	 */
 	public ActivationFunction getActivationFunction() { return activationFunction; }
 }

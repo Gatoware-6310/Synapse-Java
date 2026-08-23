@@ -167,9 +167,15 @@ public final class CudaBackend implements Backend {
 		private int step;
 	}
 
-	/** Result of a fused final Dense + Softmax + sparse cross-entropy training step. */
+	/** Result of a fused final Dense + Softmax + sparse cross-entropy training step.
+	 * @param inputGradient gradient with respect to the final Dense layer input
+	 * @param loss average sparse cross-entropy loss for the batch
+	 */
 	public record SoftmaxTrainingResult(Matrix inputGradient, float loss) { }
 
+	/** Creates and initializes a CUDA backend.
+	 * @throws IllegalStateException if CUDA or cuBLAS cannot be initialized
+	 */
 	public CudaBackend() {
 		try {
 			JCuda.setExceptionsEnabled(true);
@@ -184,6 +190,9 @@ public final class CudaBackend implements Backend {
 		}
 	}
 
+	/** Checks whether a usable CUDA device and cuBLAS runtime are available.
+	 * @return true if the CUDA backend can be initialized
+	 */
 	public static boolean isAvailable() {
 		cublasHandle probeHandle = new cublasHandle();
 		boolean handleCreated = false;
@@ -224,12 +233,20 @@ public final class CudaBackend implements Backend {
 		}
 	}
 
+	/** Checks whether the compiled resident ReLU CUDA kernels are available.
+	 * @return true if resident ReLU execution is supported
+	 */
 	public synchronized boolean supportsResidentRelu() {
 		ensureOpen();
 		return ensureKernels();
 	}
 
-	/** Computes weights*input + bias followed by ReLU without a host readback. */
+	/** Computes weights*input + bias followed by ReLU without a host readback.
+	 * @param weights dense layer weight matrix
+	 * @param biases dense layer bias vector
+	 * @param input dense layer input matrix
+	 * @return the ReLU output, kept resident on CUDA when possible
+	 */
 	public synchronized Matrix denseReluResident(Matrix weights, Matrix biases, Matrix input) {
 		ensureOpen();
 		if (!ensureKernels())
@@ -261,6 +278,14 @@ public final class CudaBackend implements Backend {
 	 * Runs the final Dense + bias + Softmax + sparse cross-entropy derivative fully on CUDA,
 	 * updates the final layer parameters, and returns only the resident input gradient plus
 	 * the scalar average loss. No logits or probabilities are copied to the host.
+	 *
+	 * @param weights final Dense layer weights
+	 * @param biases final Dense layer biases
+	 * @param input final Dense layer input
+	 * @param targets integer class target for each sample in the batch
+	 * @param optimizer optimizer used to update weights and biases
+	 * @param learningRate training learning rate
+	 * @return the input gradient and average batch loss
 	 */
 	public synchronized SoftmaxTrainingResult denseSoftmaxCrossEntropyBackwardUpdate(
 			Matrix weights, Matrix biases, Matrix input, int[] targets,
@@ -309,7 +334,16 @@ public final class CudaBackend implements Backend {
 		}
 	}
 
-	/** Performs ReLU backward, dense gradients, input-gradient GEMM and optimizer updates on the GPU. */
+	/** Performs ReLU backward, dense gradients, input-gradient GEMM and optimizer updates on the GPU.
+	 * @param weights dense layer weights
+	 * @param biases dense layer biases
+	 * @param input dense layer input
+	 * @param output ReLU output from the preceding forward pass
+	 * @param outputGradient gradient with respect to the layer output
+	 * @param optimizer optimizer used to update weights and biases
+	 * @param learningRate training learning rate
+	 * @return gradient with respect to the layer input
+	 */
 	public synchronized Matrix denseReluBackwardUpdate(Matrix weights, Matrix biases, Matrix input,
 			Matrix output, Matrix outputGradient, Optimizer optimizer, float learningRate) {
 		ensureOpen();
@@ -328,7 +362,15 @@ public final class CudaBackend implements Backend {
 		}
 	}
 
-	/** Performs dense backward/update when the activation derivative was calculated on the host. */
+	/** Performs dense backward/update when the activation derivative was calculated on the host.
+	 * @param weights dense layer weights
+	 * @param biases dense layer biases
+	 * @param input dense layer input
+	 * @param weightedGradient gradient with respect to pre-activation values
+	 * @param optimizer optimizer used to update weights and biases
+	 * @param learningRate training learning rate
+	 * @return gradient with respect to the layer input
+	 */
 	public synchronized Matrix denseBackwardUpdate(Matrix weights, Matrix biases, Matrix input,
 			Matrix weightedGradient, Optimizer optimizer, float learningRate) {
 		ensureOpen();
@@ -449,6 +491,9 @@ public final class CudaBackend implements Backend {
 		parameters.deviceDirty = true;
 	}
 
+	/** Clears CUDA-side state associated with an optimizer.
+	 * @param optimizer optimizer whose cached state should be released
+	 */
 	public synchronized void resetOptimizer(Optimizer optimizer) {
 		IdentityHashMap<float[][], OptimizerState> states = optimizerStates.remove(optimizer);
 		if (states == null) return;
@@ -458,7 +503,9 @@ public final class CudaBackend implements Backend {
 		}
 	}
 
-	/** Synchronizes a matrix whose newest copy is on the GPU back into Matrix.values. */
+	/** Synchronizes a matrix whose newest copy is on the GPU back into Matrix.values.
+	 * @param matrix matrix to synchronize to host memory
+	 */
 	public synchronized void materialize(Matrix matrix) {
 		if (matrix == null) return;
 		DeviceBuffer buffer = cache.get(matrix.values);

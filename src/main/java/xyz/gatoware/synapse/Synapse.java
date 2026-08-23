@@ -37,12 +37,17 @@ public final class Synapse {
 			previousBackend.close();
 	}
 
-	/** Returns the currently selected compute device. */
+	/** Returns the currently selected compute device.
+	 * @return the currently selected compute device
+	 */
 	public static Devices getDevice() {
 		return device;
 	}
 
-	/** Checks whether a device is available on this system. */
+	/** Checks whether a device is available on this system.
+	 * @param requestedDevice device to check
+	 * @return true if the requested device is available
+	 */
 	public static boolean isDeviceAvailable(Devices requestedDevice) {
 		if (requestedDevice == null)
 			return false;
@@ -52,19 +57,25 @@ public final class Synapse {
 		};
 	}
 
-	/** Sets the CUDA training mini-batch size. Default is 32. */
+	/** Sets the CUDA training mini-batch size. Default is 32.
+	 * @param batchSize CUDA mini-batch size to use
+	 */
 	public static void setCudaBatchSize(int batchSize) {
 		if (batchSize <= 0)
 			throw new IllegalArgumentException("CUDA batch size must be positive");
 		cudaBatchSize = batchSize;
 	}
 
-	/** Returns the configured CUDA training mini-batch size. */
+	/** Returns the configured CUDA training mini-batch size.
+	 * @return the configured CUDA mini-batch size
+	 */
 	public static int getCudaBatchSize() {
 		return cudaBatchSize;
 	}
 
-	/** Returns the active internal compute backend. */
+	/** Returns the active internal compute backend.
+	 * @return the active compute backend
+	 */
 	public static Backend backend() {
 		return backend;
 	}

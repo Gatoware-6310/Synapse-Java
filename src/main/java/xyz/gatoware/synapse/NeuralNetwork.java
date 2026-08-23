@@ -50,15 +50,25 @@ public class NeuralNetwork {
 	private List<Layer> layers = new ArrayList<>();
 	private float lastLoss = Float.NaN;
 
+	/** Creates an empty neural network. */
 	public NeuralNetwork() {
 		// here for compatibility
 	}
 
+	/** Creates a neural network containing the given layers in order.
+	 * @param layerList layers to add to the network
+	 */
 	public NeuralNetwork(Layer[] layerList) {
 		for (Layer l : layerList)
 			addLayer(l);
 	}
 
+	/** Creates a simple fully connected classifier.
+	 * @param inputs number of input values
+	 * @param layerSize number of neurons in each hidden layer
+	 * @param layers number of hidden layers
+	 * @param outputs number of output neurons
+	 */
 	public NeuralNetwork(int inputs, int layerSize, int layers, int outputs) {
 		if (inputs <= 0)
 			throw new IllegalArgumentException("inputs must be greater than 0");
@@ -80,11 +90,17 @@ public class NeuralNetwork {
 		addLayer(new DenseLayer(layerSize, outputs, new Softmax()));
 	}
 
+	/** Adds a layer to the end of the network.
+	 * @param layer layer to add
+	 */
 	public void addLayer(Layer layer) {
 		layers.add(layer);
 	}
 
-	/** Runs the input through every layer and returns the output. */
+	/** Runs the input through every layer and returns the output.
+	 * @param input network input
+	 * @return network output
+	 */
 	public Matrix forward(Matrix input) {
 		Matrix output = input;
 		for (int i = 0; i < layers.size(); i++) {
@@ -98,7 +114,11 @@ public class NeuralNetwork {
 		return output;
 	}
 
-	/** Runs the input through the given zero-based layer and returns that layer's activations. */
+	/** Runs the input through the given zero-based layer and returns that layer's activations.
+	 * @param input network input
+	 * @param layerIndex zero-based index of the final layer to run
+	 * @return output of the selected layer
+	 */
 	public Matrix forwardTo(Matrix input, int layerIndex) {
 		validateLayerIndex(layerIndex);
 		Matrix output = input;
@@ -107,7 +127,12 @@ public class NeuralNetwork {
 		return output;
 	}
 
-	/** Returns the gradient with respect to the network input without updating parameters. */
+	/** Returns the gradient with respect to the network input without updating parameters.
+	 * @param input network input
+	 * @param layerIndex zero-based layer at which the supplied gradient starts
+	 * @param gradient gradient with respect to the selected layer's output
+	 * @return gradient with respect to the original network input
+	 */
 	public Matrix inputGradient(Matrix input, int layerIndex, Matrix gradient) {
 		Matrix activation = forwardTo(input, layerIndex);
 		if (gradient == null)
@@ -132,35 +157,86 @@ public class NeuralNetwork {
 		return output;
 	}
 
+	/** Trains the network with a custom loss function and the default Adam optimizer.
+	 * @param dataset training dataset
+	 * @param lossFunction loss function used for training
+	 * @param epochs number of training epochs
+	 * @param learningRate training learning rate
+	 */
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate) {
 		fit(dataset, lossFunction, epochs, learningRate, new Adam(), false);
 	}
 
+	/** Trains the network with a custom loss function, default Adam optimizer, and batch size.
+	 * @param dataset training dataset
+	 * @param lossFunction loss function used for training
+	 * @param epochs number of training epochs
+	 * @param learningRate training learning rate
+	 * @param batchSize number of samples per training batch
+	 */
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
 			final int batchSize) {
 		fit(dataset, lossFunction, epochs, learningRate, new Adam(), false, batchSize);
 	}
 
+	/** Trains the network with a custom loss function and optimizer.
+	 * @param dataset training dataset
+	 * @param lossFunction loss function used for training
+	 * @param epochs number of training epochs
+	 * @param learningRate training learning rate
+	 * @param optimizer optimizer used to update trainable parameters
+	 */
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
 			final Optimizer optimizer) {
 		fit(dataset, lossFunction, epochs, learningRate, optimizer, false);
 	}
 
+	/** Trains the network with a custom loss function, optimizer, and batch size.
+	 * @param dataset training dataset
+	 * @param lossFunction loss function used for training
+	 * @param epochs number of training epochs
+	 * @param learningRate training learning rate
+	 * @param optimizer optimizer used to update trainable parameters
+	 * @param batchSize number of samples per training batch
+	 */
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
 			final Optimizer optimizer, final int batchSize) {
 		fit(dataset, lossFunction, epochs, learningRate, optimizer, false, batchSize);
 	}
 
+	/** Trains the network with a custom loss function and optional epoch logging.
+	 * @param dataset training dataset
+	 * @param lossFunction loss function used for training
+	 * @param epochs number of training epochs
+	 * @param learningRate training learning rate
+	 * @param logging whether to print loss and accuracy after each epoch
+	 */
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
 			final boolean logging) {
 		fit(dataset, lossFunction, epochs, learningRate, new Adam(), logging);
 	}
 
+	/** Trains the network with a custom loss function, batch size, and optional epoch logging.
+	 * @param dataset training dataset
+	 * @param lossFunction loss function used for training
+	 * @param epochs number of training epochs
+	 * @param learningRate training learning rate
+	 * @param logging whether to print loss and accuracy after each epoch
+	 * @param batchSize number of samples per training batch
+	 */
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
 			final boolean logging, final int batchSize) {
 		fit(dataset, lossFunction, epochs, learningRate, new Adam(), logging, batchSize);
 	}
 
+	/** Trains the network with a custom loss function, optimizer, and optional epoch logging.
+	 * @param dataset training dataset
+	 * @param lossFunction loss function used for training
+	 * @param epochs number of training epochs
+	 * @param learningRate training learning rate
+	 * @param optimizer optimizer used to update trainable parameters
+	 * @param logging whether to print loss and accuracy after each epoch
+	 */
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
 			final Optimizer optimizer, final boolean logging) {
 		validateTrainingArguments(dataset, lossFunction, epochs, learningRate, optimizer);
@@ -171,6 +247,15 @@ public class NeuralNetwork {
 		fitCpu(dataset, lossFunction, epochs, learningRate, optimizer, logging, 1);
 	}
 
+	/** Trains the network with full control over loss, optimizer, logging, and batch size.
+	 * @param dataset training dataset
+	 * @param lossFunction loss function used for training
+	 * @param epochs number of training epochs
+	 * @param learningRate training learning rate
+	 * @param optimizer optimizer used to update trainable parameters
+	 * @param logging whether to print loss and accuracy after each epoch
+	 * @param batchSize number of samples per training batch
+	 */
 	public void fit(final Dataset dataset, final LossFunction lossFunction, final int epochs, final float learningRate,
 			final Optimizer optimizer, final boolean logging, final int batchSize) {
 		validateTrainingArguments(dataset, lossFunction, epochs, learningRate, optimizer);
@@ -363,46 +448,105 @@ public class NeuralNetwork {
 			throw new IllegalArgumentException("Learning rate must be positive and finite");
 	}
 
+	/** Trains the network with sparse categorical cross entropy and Adam.
+	 * @param dataset training dataset
+	 * @param epochs number of training epochs
+	 * @param learningRate training learning rate
+	 */
 	public void fit(final Dataset dataset, final int epochs, final float learningRate) {
 		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, new Adam(), false);
 	}
 
+	/** Trains the network with the default loss and optimizer using the given batch size.
+	 * @param dataset training dataset
+	 * @param epochs number of training epochs
+	 * @param learningRate training learning rate
+	 * @param batchSize number of samples per training batch
+	 */
 	public void fit(final Dataset dataset, final int epochs, final float learningRate, final int batchSize) {
 		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, new Adam(), false, batchSize);
 	}
 
+	/** Trains the network with the default loss and a custom optimizer.
+	 * @param dataset training dataset
+	 * @param epochs number of training epochs
+	 * @param learningRate training learning rate
+	 * @param optimizer optimizer used to update trainable parameters
+	 */
 	public void fit(final Dataset dataset, final int epochs, final float learningRate, final Optimizer optimizer) {
 		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, optimizer, false);
 	}
 
+	/** Trains the network with the default loss, a custom optimizer, and batch size.
+	 * @param dataset training dataset
+	 * @param epochs number of training epochs
+	 * @param learningRate training learning rate
+	 * @param optimizer optimizer used to update trainable parameters
+	 * @param batchSize number of samples per training batch
+	 */
 	public void fit(final Dataset dataset, final int epochs, final float learningRate,
 			final Optimizer optimizer, final int batchSize) {
 		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, optimizer, false, batchSize);
 	}
 
+	/** Trains the network with the default loss and optimizer and optional epoch logging.
+	 * @param dataset training dataset
+	 * @param epochs number of training epochs
+	 * @param learningRate training learning rate
+	 * @param logging whether to print loss and accuracy after each epoch
+	 */
 	public void fit(final Dataset dataset, final int epochs, final float learningRate, final boolean logging) {
 		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, new Adam(), logging);
 	}
 
+	/** Trains the network with the default loss and optimizer, batch size, and optional logging.
+	 * @param dataset training dataset
+	 * @param epochs number of training epochs
+	 * @param learningRate training learning rate
+	 * @param logging whether to print loss and accuracy after each epoch
+	 * @param batchSize number of samples per training batch
+	 */
 	public void fit(final Dataset dataset, final int epochs, final float learningRate,
 			final boolean logging, final int batchSize) {
 		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, new Adam(), logging, batchSize);
 	}
 
+	/** Trains the network with the default loss, a custom optimizer, and optional logging.
+	 * @param dataset training dataset
+	 * @param epochs number of training epochs
+	 * @param learningRate training learning rate
+	 * @param optimizer optimizer used to update trainable parameters
+	 * @param logging whether to print loss and accuracy after each epoch
+	 */
 	public void fit(final Dataset dataset, final int epochs, final float learningRate, final Optimizer optimizer,
 			final boolean logging) {
 		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, optimizer, logging);
 	}
 
+	/** Trains the network with the default loss and full optimizer, logging, and batch controls.
+	 * @param dataset training dataset
+	 * @param epochs number of training epochs
+	 * @param learningRate training learning rate
+	 * @param optimizer optimizer used to update trainable parameters
+	 * @param logging whether to print loss and accuracy after each epoch
+	 * @param batchSize number of samples per training batch
+	 */
 	public void fit(final Dataset dataset, final int epochs, final float learningRate, final Optimizer optimizer,
 			final boolean logging, final int batchSize) {
 		fit(dataset, new SparseCategoricalCrossEntropy(), epochs, learningRate, optimizer, logging, batchSize);
 	}
 
+	/** Returns the average loss from the most recent training epoch.
+	 * @return the most recent average loss, or NaN before training
+	 */
 	public float getLastLoss() {
 		return lastLoss;
 	}
 
+	/** Returns the index of the largest value in the network output.
+	 * @param input input to classify
+	 * @return index of the largest output value
+	 */
 	public int predict(Matrix input) {
 		Matrix output = forward(input);
 		if (output.rows() == 0 || output.columns() == 0 || (output.rows() != 1 && output.columns() != 1))
@@ -421,6 +565,10 @@ public class NeuralNetwork {
 		return prediction;
 	}
 
+	/** Calculates classification accuracy for a dataset with integer class targets.
+	 * @param dataset dataset to evaluate
+	 * @return fraction of samples classified correctly, from 0 to 1
+	 */
 	public float accuracy(Dataset dataset) {
 		if (dataset == null)
 			throw new IllegalArgumentException("Dataset cannot be null");
@@ -474,10 +622,18 @@ public class NeuralNetwork {
 		}
 	}
 
+	/** Saves this network to a Synapse network file.
+	 * @param filename destination filename
+	 * @throws IOException if the network cannot be written
+	 */
 	public void save(String filename) throws IOException {
 		save(Path.of(filename));
 	}
 
+	/** Saves this network to a Synapse network file.
+	 * @param path destination path
+	 * @throws IOException if the network cannot be written
+	 */
 	public void save(Path path) throws IOException {
 		materializeCudaParameters();
 		try (DataOutputStream output = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(path)))) {
@@ -489,10 +645,20 @@ public class NeuralNetwork {
 		}
 	}
 
+	/** Loads a neural network from a Synapse network file.
+	 * @param filename source filename
+	 * @return the loaded neural network
+	 * @throws IOException if the network file cannot be read or is invalid
+	 */
 	public static NeuralNetwork load(String filename) throws IOException {
 		return load(Path.of(filename));
 	}
 
+	/** Loads a neural network from a Synapse network file.
+	 * @param path source path
+	 * @return the loaded neural network
+	 * @throws IOException if the network file cannot be read or is invalid
+	 */
 	public static NeuralNetwork load(Path path) throws IOException {
 		try (DataInputStream input = new DataInputStream(new BufferedInputStream(Files.newInputStream(path)))) {
 			if (input.readInt() != FILE_MAGIC)
