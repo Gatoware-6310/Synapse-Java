@@ -22,6 +22,65 @@ NeuralNetwork defined = new NeuralNetwork(new Layer[] {
 NeuralNetwork simple = new NeuralNetwork(784, 128, 2, 10);
 ```
 
+## Convolutional Neural Networks
+CNNs are mainly useful for images. A convolution layer looks at small parts of an image at a time and learns useful patterns from them, such as edges and shapes.
+
+Synapse uses the same `NeuralNetwork` and `Matrix` classes for CNNs as it does for normal neural networks.
+
+For example, this creates a small CNN for 28x28 grayscale images:
+
+```java
+NeuralNetwork cnn = new NeuralNetwork(new Layer[] {
+	new Conv2DLayer(28, 28, 1, 32, 3, new ReLU()),
+	new MaxPool2DLayer(26, 26, 32, 2),
+	new DenseLayer(13 * 13 * 32, 10, new Softmax())
+});
+```
+
+The first layer:
+
+```java
+new Conv2DLayer(28, 28, 1, 32, 3, new ReLU())
+```
+
+means:
+
+- `28, 28` - the image width and height
+- `1` - the number of color channels (`1` for grayscale, `3` for RGB)
+- `32` - the number of filters the layer learns (a filter being a small pattern detector that "slides" across the image)
+- `3` - each filter looks at a 3x3 part of the image
+- `new ReLU()` - the activation function
+
+With no padding, a 3x3 filter changes a 28x28 image into 26x26 output for each filter.
+
+The next layer:
+
+```java
+new MaxPool2DLayer(26, 26, 32, 2)
+```
+
+reduces each 26x26 result to 13x13 by taking the largest value from each 2x2 area. This makes the network smaller and faster while keeping the strongest features.
+
+The final `DenseLayer` can use the result directly.
+
+`Conv2DLayer` also supports stride and padding. Stride is how many pixels the filter moves each time, a stride of `1` moves one pixel at a time, while a stride of `2` moves two pixels at a time.
+
+```java
+new Conv2DLayer(28, 28, 1, 32, 3, 2, Padding.SAME, new ReLU());
+```
+
+- `Padding.NONE` means no padding.
+- `Padding.SAME` adds empty space around the image so the output size is preserved when stride is 1.
+
+Images can be loaded into a `Matrix` and saved again with `Images`:
+
+```java
+Matrix image = Images.load("image.png", 224, 224);
+Images.save(image, 224, 224, 3, "output.png");
+```
+
+`Images.load` returns RGB image data with values from `0.0` to `1.0`.
+
 ## Datasets
 Currently, CSV datasets are supported by Synapse, following this format:
 
@@ -149,6 +208,27 @@ The most recent average loss is also available after training with `getLastLoss(
 System.out.println("Final loss: " + network.getLastLoss());
 ```
 
+## Working with a specific layer
+`forwardTo` lets you stop at a specific layer and inspect its output:
+
+```java
+Matrix output = network.forwardTo(image, 4);
+```
+
+The layer number starts at `0`.
+
+`inputGradient` tells you how changing the original input would change that layer's output, without changing the network's weights. This can be used for things like DeepDream.
+
+A basic DeepDream-style update looks like this:
+
+```java
+Matrix output = network.forwardTo(image, 4);
+Matrix change = network.inputGradient(image, 4, output.copy().multiply(2.0f));
+image.add(change.multiply(0.01f));
+```
+
+Running that repeatedly changes the image in a direction that makes the selected layer respond more strongly.
+
 ## CUDA
 CUDA acceleration is optional; CPU remains the default.
 
@@ -180,3 +260,5 @@ network.save("model.snn");
 
 NeuralNetwork loadedNetwork = NeuralNetwork.load("model.snn");
 ```
+
+CNN and pooling layers can be saved the same way as dense layers. Older dense-only `.snn` files are still supported.

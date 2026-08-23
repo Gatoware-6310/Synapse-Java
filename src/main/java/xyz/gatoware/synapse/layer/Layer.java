@@ -11,6 +11,14 @@ public interface Layer {
 	 */
 	Matrix forward(Matrix input);
 
+	/** Returns the gradient with respect to the layer input without updating parameters.
+	 * @param outputGradient the gradient at the layer output
+	 * @return the gradient at the layer input
+	 */
+	default Matrix backwardInput(Matrix outputGradient) {
+		throw new UnsupportedOperationException("Layer does not support input gradients");
+	}
+
 	/** Runs backpropagation for the layer and returns the input gradient.
 	 * @param outputGradient the gradient at the layer output
 	 * @param learningRate the training learning rate
