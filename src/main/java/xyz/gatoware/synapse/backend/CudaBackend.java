@@ -150,12 +150,12 @@ public final class CudaBackend implements Backend {
 	private int pooledBuffers;
 	private boolean closed;
 
-	private static final class DeviceBuffer {
-		private final Pointer pointer;
-		private final int elements;
-		private boolean deviceDirty;
+	static final class DeviceBuffer {
+		final Pointer pointer;
+		final int elements;
+		boolean deviceDirty;
 
-		private DeviceBuffer(Pointer pointer, int elements) {
+		DeviceBuffer(Pointer pointer, int elements) {
 			this.pointer = pointer;
 			this.elements = elements;
 		}
@@ -201,8 +201,7 @@ public final class CudaBackend implements Backend {
 			JCublas2.setExceptionsEnabled(true);
 			int[] deviceCount = {0};
 			JCuda.cudaGetDeviceCount(deviceCount);
-			if (deviceCount[0] <= 0)
-				return false;
+			if (deviceCount[0] <= 0) return false;
 			JCublas2.cublasCreate(probeHandle);
 			handleCreated = true;
 			return true;
@@ -233,6 +232,44 @@ public final class CudaBackend implements Backend {
 		}
 	}
 
+	/** Returns whether the newest copy of a matrix is already resident on this CUDA backend.
+	 * @param matrix matrix to check
+	 * @return true when this backend has a cached device allocation for the matrix
+	 */
+	public synchronized boolean isResident(Matrix matrix) {
+		return matrix != null && cache.containsKey(matrix.values);
+	}
+
+	DeviceBuffer device(Matrix matrix) {
+		ensureOpen();
+		return getOrUpload(matrix.values, matrix.rows(), matrix.columns());
+	}
+
+	DeviceBuffer temporary(int elements) {
+		ensureOpen();
+		return acquire(elements);
+	}
+
+	void zero(DeviceBuffer buffer) {
+		JCuda.cudaMemset(buffer.pointer, 0, (long) buffer.elements * Sizeof.FLOAT);
+	}
+
+	Matrix resident(DeviceBuffer buffer, int rows, int columns) {
+		Matrix result = new Matrix(rows, columns);
+		buffer.deviceDirty = true;
+		cacheResult(result.values, buffer);
+		return result;
+	}
+
+	void releaseTemporary(DeviceBuffer buffer) {
+		if (buffer != null) release(buffer);
+	}
+
+	void updateResident(Matrix parameters, DeviceBuffer gradients, Optimizer optimizer, float learningRate) {
+		DeviceBuffer parameterBuffer = getOrUpload(parameters.values, parameters.rows(), parameters.columns());
+		updateOptimizer(parameters.values, parameterBuffer, gradients, optimizer, learningRate);
+	}
+
 	/** Checks whether the compiled resident ReLU CUDA kernels are available.
 	 * @return true if resident ReLU execution is supported
 	 */
@@ -249,11 +286,9 @@ public final class CudaBackend implements Backend {
 	 */
 	public synchronized Matrix denseReluResident(Matrix weights, Matrix biases, Matrix input) {
 		ensureOpen();
-		if (!ensureKernels())
-			throw new IllegalStateException("CUDA training kernels are unavailable");
+		if (!ensureKernels()) throw new IllegalStateException("CUDA training kernels are unavailable");
 		if (weights.columns() != input.rows() || biases.rows() != weights.rows() || biases.columns() != 1)
 			throw new IllegalArgumentException("Incompatible dense layer dimensions");
-
 		int rows = weights.rows();
 		int shared = weights.columns();
 		int columns = input.columns();
@@ -264,9 +299,7 @@ public final class CudaBackend implements Backend {
 		boolean resultOwned = true;
 		try {
 			launchBiasRelu(deviceResult, deviceBias, rows, columns);
-			Matrix result = new Matrix(rows, columns);
-			deviceResult.deviceDirty = true;
-			cacheResult(result.values, deviceResult);
+			Matrix result = resident(deviceResult, rows, columns);
 			resultOwned = false;
 			return result;
 		} finally {
@@ -274,11 +307,7 @@ public final class CudaBackend implements Backend {
 		}
 	}
 
-	/**
-	 * Runs the final Dense + bias + Softmax + sparse cross-entropy derivative fully on CUDA,
-	 * updates the final layer parameters, and returns only the resident input gradient plus
-	 * the scalar average loss. No logits or probabilities are copied to the host.
-	 *
+	/** Runs the final Dense + bias + Softmax + sparse cross-entropy derivative fully on CUDA.
 	 * @param weights final Dense layer weights
 	 * @param biases final Dense layer biases
 	 * @param input final Dense layer input
@@ -288,11 +317,9 @@ public final class CudaBackend implements Backend {
 	 * @return the input gradient and average batch loss
 	 */
 	public synchronized SoftmaxTrainingResult denseSoftmaxCrossEntropyBackwardUpdate(
-			Matrix weights, Matrix biases, Matrix input, int[] targets,
-			Optimizer optimizer, float learningRate) {
+			Matrix weights, Matrix biases, Matrix input, int[] targets, Optimizer optimizer, float learningRate) {
 		ensureOpen();
-		if (!ensureKernels())
-			throw new IllegalStateException("CUDA training kernels are unavailable");
+		if (!ensureKernels()) throw new IllegalStateException("CUDA training kernels are unavailable");
 		if (weights.columns() != input.rows() || biases.rows() != weights.rows() || biases.columns() != 1)
 			throw new IllegalArgumentException("Incompatible dense layer dimensions");
 		int classes = weights.rows();
@@ -300,9 +327,7 @@ public final class CudaBackend implements Backend {
 		if (targets == null || targets.length != batch)
 			throw new IllegalArgumentException("Target count must match CUDA batch size");
 		for (int target : targets)
-			if (target < 0 || target >= classes)
-				throw new IllegalArgumentException("Target class is out of range");
-
+			if (target < 0 || target >= classes) throw new IllegalArgumentException("Target class is out of range");
 		DeviceBuffer deviceWeights = getOrUpload(weights.values, classes, weights.columns());
 		DeviceBuffer deviceInput = getOrUpload(input.values, input.rows(), batch);
 		DeviceBuffer deviceBias = getOrUpload(biases.values, classes, 1);
@@ -317,13 +342,11 @@ public final class CudaBackend implements Backend {
 			JCuda.cudaMemcpy(deviceTargets.pointer, Pointer.to(targetValues), (long) batch * Sizeof.FLOAT,
 				cudaMemcpyKind.cudaMemcpyHostToDevice);
 			launchSoftmaxXentDelta(logits, deviceTargets, delta, losses, classes, batch);
-
 			float[] hostLosses = new float[batch];
 			JCuda.cudaMemcpy(Pointer.to(hostLosses), losses.pointer, (long) batch * Sizeof.FLOAT,
 				cudaMemcpyKind.cudaMemcpyDeviceToHost);
 			float totalLoss = 0.0f;
 			for (float value : hostLosses) totalLoss += value;
-
 			Matrix inputGradient = denseBackwardUpdateDevice(weights, biases, input, delta, optimizer, learningRate);
 			return new SoftmaxTrainingResult(inputGradient, totalLoss / batch);
 		} finally {
@@ -347,8 +370,7 @@ public final class CudaBackend implements Backend {
 	public synchronized Matrix denseReluBackwardUpdate(Matrix weights, Matrix biases, Matrix input,
 			Matrix output, Matrix outputGradient, Optimizer optimizer, float learningRate) {
 		ensureOpen();
-		if (!ensureKernels())
-			throw new IllegalStateException("CUDA training kernels are unavailable");
+		if (!ensureKernels()) throw new IllegalStateException("CUDA training kernels are unavailable");
 		int rows = weights.rows();
 		int batch = input.columns();
 		DeviceBuffer deviceOutput = getOrUpload(output.values, rows, batch);
@@ -374,6 +396,7 @@ public final class CudaBackend implements Backend {
 	public synchronized Matrix denseBackwardUpdate(Matrix weights, Matrix biases, Matrix input,
 			Matrix weightedGradient, Optimizer optimizer, float learningRate) {
 		ensureOpen();
+		if (!ensureKernels()) throw new IllegalStateException("CUDA training kernels are unavailable");
 		DeviceBuffer delta = getOrUpload(weightedGradient.values, weightedGradient.rows(), weightedGradient.columns());
 		return denseBackwardUpdateDevice(weights, biases, input, delta, optimizer, learningRate);
 	}
@@ -385,7 +408,6 @@ public final class CudaBackend implements Backend {
 		int batch = input.columns();
 		if (delta.elements != outputSize * batch)
 			throw new IllegalArgumentException("Gradient dimensions do not match dense layer output");
-
 		DeviceBuffer deviceWeights = getOrUpload(weights.values, outputSize, inputSize);
 		DeviceBuffer deviceBiases = getOrUpload(biases.values, outputSize, 1);
 		DeviceBuffer deviceInput = getOrUpload(input.values, inputSize, batch);
@@ -394,33 +416,18 @@ public final class CudaBackend implements Backend {
 		DeviceBuffer biasGradient = acquire(outputSize);
 		boolean inputOwned = true;
 		try {
-			JCublas2.cublasSgemm(handle,
-				cublasOperation.CUBLAS_OP_N, cublasOperation.CUBLAS_OP_T,
-				batch, inputSize, outputSize,
-				alpha,
-				delta.pointer, batch,
-				deviceWeights.pointer, inputSize,
-				beta,
-				inputGradient.pointer, batch);
-
+			JCublas2.cublasSgemm(handle, cublasOperation.CUBLAS_OP_N, cublasOperation.CUBLAS_OP_T,
+				batch, inputSize, outputSize, alpha, delta.pointer, batch, deviceWeights.pointer, inputSize,
+				beta, inputGradient.pointer, batch);
 			float scaleValue = 1.0f / batch;
 			Pointer scale = Pointer.to(new float[] {scaleValue});
-			JCublas2.cublasSgemm(handle,
-				cublasOperation.CUBLAS_OP_T, cublasOperation.CUBLAS_OP_N,
-				inputSize, outputSize, batch,
-				scale,
-				deviceInput.pointer, batch,
-				delta.pointer, batch,
-				beta,
-				weightGradient.pointer, inputSize);
+			JCublas2.cublasSgemm(handle, cublasOperation.CUBLAS_OP_T, cublasOperation.CUBLAS_OP_N,
+				inputSize, outputSize, batch, scale, deviceInput.pointer, batch, delta.pointer, batch,
+				beta, weightGradient.pointer, inputSize);
 			launchBiasGradient(biasGradient, delta, outputSize, batch, scaleValue);
-
 			updateOptimizer(weights.values, deviceWeights, weightGradient, optimizer, learningRate);
 			updateOptimizer(biases.values, deviceBiases, biasGradient, optimizer, learningRate);
-
-			Matrix result = new Matrix(inputSize, batch);
-			inputGradient.deviceDirty = true;
-			cacheResult(result.values, inputGradient);
+			Matrix result = resident(inputGradient, inputSize, batch);
 			inputOwned = false;
 			return result;
 		} finally {
@@ -461,7 +468,6 @@ public final class CudaBackend implements Backend {
 		} else {
 			throw new IllegalArgumentException("Optimizer is not supported by CUDA training: " + optimizer.getClass().getName());
 		}
-
 		OptimizerState state = null;
 		if (stateCount > 0) {
 			IdentityHashMap<float[][], OptimizerState> states = optimizerStates.computeIfAbsent(optimizer,
@@ -479,7 +485,6 @@ public final class CudaBackend implements Backend {
 			}
 			state.step++;
 		}
-
 		float correction1 = 1.0f;
 		float correction2 = 1.0f;
 		if (kind == 4) {
@@ -519,18 +524,11 @@ public final class CudaBackend implements Backend {
 		boolean owned = true;
 		try {
 			if (columns == 1) {
-				JCublas2.cublasSgemv(handle,
-					cublasOperation.CUBLAS_OP_T,
-					shared, rows, alpha,
-					left.pointer, shared,
-					right.pointer, 1,
-					beta, result.pointer, 1);
+				JCublas2.cublasSgemv(handle, cublasOperation.CUBLAS_OP_T, shared, rows, alpha,
+					left.pointer, shared, right.pointer, 1, beta, result.pointer, 1);
 			} else {
-				JCublas2.cublasSgemm(handle,
-					cublasOperation.CUBLAS_OP_N, cublasOperation.CUBLAS_OP_N,
-					columns, rows, shared, alpha,
-					right.pointer, columns,
-					left.pointer, shared,
+				JCublas2.cublasSgemm(handle, cublasOperation.CUBLAS_OP_N, cublasOperation.CUBLAS_OP_N,
+					columns, rows, shared, alpha, right.pointer, columns, left.pointer, shared,
 					beta, result.pointer, columns);
 			}
 			owned = false;
@@ -541,44 +539,33 @@ public final class CudaBackend implements Backend {
 	}
 
 	private void launchBiasRelu(DeviceBuffer data, DeviceBuffer bias, int rows, int columns) {
-		int[] rowsArg = {rows};
-		int[] columnsArg = {columns};
 		Pointer params = Pointer.to(Pointer.to(data.pointer), Pointer.to(bias.pointer),
-			Pointer.to(rowsArg), Pointer.to(columnsArg));
+			Pointer.to(new int[] {rows}), Pointer.to(new int[] {columns}));
 		launch1d(biasReluFunction, rows * columns, params);
 	}
 
 	private void launchBiasAdd(DeviceBuffer data, DeviceBuffer bias, int rows, int columns) {
-		int[] rowsArg = {rows};
-		int[] columnsArg = {columns};
 		Pointer params = Pointer.to(Pointer.to(data.pointer), Pointer.to(bias.pointer),
-			Pointer.to(rowsArg), Pointer.to(columnsArg));
+			Pointer.to(new int[] {rows}), Pointer.to(new int[] {columns}));
 		launch1d(biasAddFunction, rows * columns, params);
 	}
 
 	private void launchSoftmaxXentDelta(DeviceBuffer logits, DeviceBuffer targets, DeviceBuffer delta,
 			DeviceBuffer losses, int classes, int batch) {
-		int[] classesArg = {classes};
-		int[] batchArg = {batch};
 		Pointer params = Pointer.to(Pointer.to(logits.pointer), Pointer.to(targets.pointer),
-			Pointer.to(delta.pointer), Pointer.to(losses.pointer),
-			Pointer.to(classesArg), Pointer.to(batchArg));
+			Pointer.to(delta.pointer), Pointer.to(losses.pointer), Pointer.to(new int[] {classes}), Pointer.to(new int[] {batch}));
 		launch1d(softmaxXentDeltaFunction, batch, params);
 	}
 
 	private void launchReluBackward(DeviceBuffer delta, DeviceBuffer output, DeviceBuffer gradient, int count) {
-		int[] countArg = {count};
 		Pointer params = Pointer.to(Pointer.to(delta.pointer), Pointer.to(output.pointer),
-			Pointer.to(gradient.pointer), Pointer.to(countArg));
+			Pointer.to(gradient.pointer), Pointer.to(new int[] {count}));
 		launch1d(reluBackwardFunction, count, params);
 	}
 
 	private void launchBiasGradient(DeviceBuffer result, DeviceBuffer delta, int rows, int columns, float scale) {
-		int[] rowsArg = {rows};
-		int[] columnsArg = {columns};
-		float[] scaleArg = {scale};
 		Pointer params = Pointer.to(Pointer.to(result.pointer), Pointer.to(delta.pointer),
-			Pointer.to(rowsArg), Pointer.to(columnsArg), Pointer.to(scaleArg));
+			Pointer.to(new int[] {rows}), Pointer.to(new int[] {columns}), Pointer.to(new float[] {scale}));
 		launch1d(biasGradientFunction, rows, params);
 	}
 
@@ -588,27 +575,16 @@ public final class CudaBackend implements Backend {
 		Pointer nullPointer = new Pointer();
 		Pointer state1 = state != null && state.first != null ? state.first.pointer : nullPointer;
 		Pointer state2 = state != null && state.second != null ? state.second.pointer : nullPointer;
-		int[] countArg = {count};
-		int[] kindArg = {kind};
-		float[] lrArg = {learningRate};
-		float[] p1Arg = {p1};
-		float[] p2Arg = {p2};
-		float[] epsilonArg = {epsilon};
-		float[] c1Arg = {correction1};
-		float[] c2Arg = {correction2};
-		Pointer params = Pointer.to(
-			Pointer.to(parameters.pointer), Pointer.to(gradients.pointer),
-			Pointer.to(state1), Pointer.to(state2),
-			Pointer.to(countArg), Pointer.to(kindArg), Pointer.to(lrArg),
-			Pointer.to(p1Arg), Pointer.to(p2Arg), Pointer.to(epsilonArg),
-			Pointer.to(c1Arg), Pointer.to(c2Arg));
+		Pointer params = Pointer.to(Pointer.to(parameters.pointer), Pointer.to(gradients.pointer),
+			Pointer.to(state1), Pointer.to(state2), Pointer.to(new int[] {count}), Pointer.to(new int[] {kind}),
+			Pointer.to(new float[] {learningRate}), Pointer.to(new float[] {p1}), Pointer.to(new float[] {p2}),
+			Pointer.to(new float[] {epsilon}), Pointer.to(new float[] {correction1}), Pointer.to(new float[] {correction2}));
 		launch1d(optimizerUpdateFunction, count, params);
 	}
 
 	private void launch1d(CUfunction function, int count, Pointer params) {
 		int blocks = (count + KERNEL_BLOCK_SIZE - 1) / KERNEL_BLOCK_SIZE;
-		JCudaDriver.cuLaunchKernel(function, blocks, 1, 1, KERNEL_BLOCK_SIZE, 1, 1,
-			0, null, params, null);
+		JCudaDriver.cuLaunchKernel(function, blocks, 1, 1, KERNEL_BLOCK_SIZE, 1, 1, 0, null, params, null);
 	}
 
 	private boolean ensureKernels() {
@@ -674,7 +650,6 @@ public final class CudaBackend implements Backend {
 			return cached;
 		}
 		if (cached != null) removeCached(matrix, cached);
-
 		DeviceBuffer buffer = acquire(elements);
 		boolean owned = true;
 		try {

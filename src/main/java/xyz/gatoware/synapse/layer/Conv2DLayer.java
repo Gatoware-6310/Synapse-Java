@@ -1,6 +1,10 @@
 package xyz.gatoware.synapse.layer;
 
+import xyz.gatoware.synapse.Synapse;
 import xyz.gatoware.synapse.activation.ActivationFunction;
+import xyz.gatoware.synapse.activation.ReLU;
+import xyz.gatoware.synapse.backend.CudaBackend;
+import xyz.gatoware.synapse.backend.CudaCnnOps;
 import xyz.gatoware.synapse.matrix.Matrix;
 import xyz.gatoware.synapse.optimizer.Optimizer;
 import xyz.gatoware.synapse.optimizer.SGD;
@@ -20,10 +24,10 @@ public class Conv2DLayer implements Layer {
 	private final int kernelValues;
 	private final Matrix kernels;
 	private final Matrix biases;
-
 	private Matrix lastInput;
 	private Matrix lastWeighted;
 	private Matrix lastOutput;
+	private boolean lastForwardCuda;
 
 	/** Creates a convolution layer with a stride of 1 and no padding.
 	 * @param inputWidth width of each input image or feature map
@@ -35,7 +39,7 @@ public class Conv2DLayer implements Layer {
 	 */
 	public Conv2DLayer(int inputWidth, int inputHeight, int inputChannels, int filters, int kernelSize,
 			ActivationFunction activationFunction) {
-		this(inputWidth, inputHeight, inputChannels, filters, kernelSize, 1, Padding.VALID, activationFunction);
+		this(inputWidth, inputHeight, inputChannels, filters, kernelSize, 1, Padding.NONE, activationFunction);
 	}
 
 	/** Creates a convolution layer with a stride of 1.
@@ -72,8 +76,8 @@ public class Conv2DLayer implements Layer {
 			throw new IllegalArgumentException("Padding cannot be null");
 		if (activationFunction == null)
 			throw new IllegalArgumentException("Activation function cannot be null");
-		if (padding == Padding.VALID && (kernelSize > inputWidth || kernelSize > inputHeight))
-			throw new IllegalArgumentException("Kernel cannot be larger than the input when using VALID padding");
+		if (padding == Padding.NONE && (kernelSize > inputWidth || kernelSize > inputHeight))
+			throw new IllegalArgumentException("Kernel cannot be larger than the input when using no padding");
 
 		long kernelValuesLong = (long) inputChannels * kernelSize * kernelSize;
 		if (kernelValuesLong > Integer.MAX_VALUE)
@@ -107,9 +111,19 @@ public class Conv2DLayer implements Layer {
 		if (input.rows() != expectedRows || input.columns() <= 0)
 			throw new IllegalArgumentException("Conv2D input must have " + expectedRows + " rows");
 
+		lastInput = input;
+		if (canUseCuda()) {
+			lastOutput = CudaCnnOps.convReluForward(input, kernels, biases, inputWidth, inputHeight, inputChannels,
+				filters, kernelSize, stride, outputWidth, outputHeight,
+				padBefore(inputWidth, outputWidth), padBefore(inputHeight, outputHeight));
+			lastWeighted = lastOutput;
+			lastForwardCuda = true;
+			return lastOutput;
+		}
+
+		lastForwardCuda = false;
 		int batchSize = input.columns();
 		int outputSize = outputWidth * outputHeight * filters;
-		lastInput = input;
 		lastWeighted = new Matrix(outputSize, batchSize);
 		lastOutput = new Matrix(outputSize, batchSize);
 		int padLeft = padBefore(inputWidth, outputWidth);
@@ -127,15 +141,12 @@ public class Conv2DLayer implements Layer {
 						for (int channel = 0; channel < inputChannels; channel++) {
 							for (int kernelY = 0; kernelY < kernelSize; kernelY++) {
 								int inputY = inputOriginY + kernelY;
-								if (inputY < 0 || inputY >= inputHeight)
-									continue;
+								if (inputY < 0 || inputY >= inputHeight) continue;
 								for (int kernelX = 0; kernelX < kernelSize; kernelX++) {
 									int inputX = inputOriginX + kernelX;
-									if (inputX < 0 || inputX >= inputWidth)
-										continue;
-									int inputIndex = inputIndex(channel, inputY, inputX);
-									int kernelIndex = kernelIndex(channel, kernelY, kernelX);
-									sum += input.values[inputIndex][sample] * kernels.values[filter][kernelIndex];
+									if (inputX < 0 || inputX >= inputWidth) continue;
+									sum += input.values[inputIndex(channel, inputY, inputX)][sample]
+										* kernels.values[filter][kernelIndex(channel, kernelY, kernelX)];
 								}
 							}
 						}
@@ -154,8 +165,7 @@ public class Conv2DLayer implements Layer {
 
 	@Override
 	public Matrix backwardInput(Matrix outputGradient) {
-		Matrix weightedGradient = activationGradient(outputGradient);
-		return inputGradient(weightedGradient);
+		return inputGradient(activationGradient(outputGradient));
 	}
 
 	@Override
@@ -169,6 +179,13 @@ public class Conv2DLayer implements Layer {
 			throw new IllegalArgumentException("Learning rate must be positive and finite");
 		if (optimizer == null)
 			throw new IllegalArgumentException("Optimizer cannot be null");
+		validateBackwardGradient(outputGradient);
+
+		if (lastForwardCuda && canUseCuda()) {
+			return CudaCnnOps.convReluBackwardUpdate(lastInput, lastOutput, outputGradient, kernels, biases,
+				inputWidth, inputHeight, inputChannels, filters, kernelSize, stride, outputWidth, outputHeight,
+				padBefore(inputWidth, outputWidth), padBefore(inputHeight, outputHeight), optimizer, learningRate);
+		}
 
 		Matrix weightedGradient = activationGradient(outputGradient);
 		Matrix inputGradient = inputGradient(weightedGradient);
@@ -191,16 +208,12 @@ public class Conv2DLayer implements Layer {
 						for (int channel = 0; channel < inputChannels; channel++) {
 							for (int kernelY = 0; kernelY < kernelSize; kernelY++) {
 								int inputY = inputOriginY + kernelY;
-								if (inputY < 0 || inputY >= inputHeight)
-									continue;
+								if (inputY < 0 || inputY >= inputHeight) continue;
 								for (int kernelX = 0; kernelX < kernelSize; kernelX++) {
 									int inputX = inputOriginX + kernelX;
-									if (inputX < 0 || inputX >= inputWidth)
-										continue;
-									int inputIndex = inputIndex(channel, inputY, inputX);
-									int kernelIndex = kernelIndex(channel, kernelY, kernelX);
-									kernelGradients.values[filter][kernelIndex] +=
-										gradient * lastInput.values[inputIndex][sample];
+									if (inputX < 0 || inputX >= inputWidth) continue;
+									kernelGradients.values[filter][kernelIndex(channel, kernelY, kernelX)] +=
+										gradient * lastInput.values[inputIndex(channel, inputY, inputX)][sample];
 								}
 							}
 						}
@@ -221,12 +234,26 @@ public class Conv2DLayer implements Layer {
 		return inputGradient;
 	}
 
-	private Matrix activationGradient(Matrix outputGradient) {
-		if (lastInput == null || lastWeighted == null || lastOutput == null)
+	private boolean canUseCuda() {
+		return activationFunction instanceof ReLU
+			&& Synapse.backend() instanceof CudaBackend
+			&& CudaCnnOps.isAvailable();
+	}
+
+	private void validateBackwardGradient(Matrix outputGradient) {
+		if (lastInput == null || lastOutput == null)
 			throw new IllegalStateException("Conv2D layer must run forward before backward");
 		if (outputGradient.rows() != lastOutput.rows() || outputGradient.columns() != lastOutput.columns())
 			throw new IllegalArgumentException("Conv2D output gradient dimensions do not match the last forward pass");
+	}
 
+	private Matrix activationGradient(Matrix outputGradient) {
+		validateBackwardGradient(outputGradient);
+		if (Synapse.backend() instanceof CudaBackend cuda) {
+			cuda.materialize(lastWeighted);
+			cuda.materialize(lastOutput);
+			cuda.materialize(outputGradient);
+		}
 		int outputSize = lastOutput.rows();
 		int batchSize = lastOutput.columns();
 		Matrix result = new Matrix(outputSize, batchSize);
@@ -248,6 +275,11 @@ public class Conv2DLayer implements Layer {
 	}
 
 	private Matrix inputGradient(Matrix weightedGradient) {
+		if (Synapse.backend() instanceof CudaBackend cuda) {
+			cuda.materialize(lastInput);
+			cuda.materialize(kernels);
+			cuda.materialize(weightedGradient);
+		}
 		int batchSize = lastInput.columns();
 		Matrix inputGradient = new Matrix(inputWidth * inputHeight * inputChannels, batchSize);
 		int padLeft = padBefore(inputWidth, outputWidth);
@@ -262,12 +294,10 @@ public class Conv2DLayer implements Layer {
 						for (int channel = 0; channel < inputChannels; channel++) {
 							for (int kernelY = 0; kernelY < kernelSize; kernelY++) {
 								int inputY = inputOriginY + kernelY;
-								if (inputY < 0 || inputY >= inputHeight)
-									continue;
+								if (inputY < 0 || inputY >= inputHeight) continue;
 								for (int kernelX = 0; kernelX < kernelSize; kernelX++) {
 									int inputX = inputOriginX + kernelX;
-									if (inputX < 0 || inputX >= inputWidth)
-										continue;
+									if (inputX < 0 || inputX >= inputWidth) continue;
 									inputGradient.values[inputIndex(channel, inputY, inputX)][sample] +=
 										kernels.values[filter][kernelIndex(channel, kernelY, kernelX)] * gradient;
 								}
@@ -281,8 +311,7 @@ public class Conv2DLayer implements Layer {
 	}
 
 	private int padBefore(int inputSize, int outputSize) {
-		if (padding == Padding.VALID)
-			return 0;
+		if (padding == Padding.NONE) return 0;
 		int totalPadding = Math.max((outputSize - 1) * stride + kernelSize - inputSize, 0);
 		return totalPadding / 2;
 	}
@@ -308,6 +337,13 @@ public class Conv2DLayer implements Layer {
 	private static void validateFlattenedSize(long size, String name) {
 		if (size <= 0 || size > Integer.MAX_VALUE)
 			throw new IllegalArgumentException(name + " is too large");
+	}
+
+	private void materializeParameters() {
+		if (Synapse.backend() instanceof CudaBackend cuda) {
+			cuda.materialize(kernels);
+			cuda.materialize(biases);
+		}
 	}
 
 	/** Returns the input width.
@@ -358,12 +394,18 @@ public class Conv2DLayer implements Layer {
 	/** Returns the learned convolution kernels.
 	 * @return the kernel matrix
 	 */
-	public Matrix getKernels() { return kernels; }
+	public Matrix getKernels() {
+		materializeParameters();
+		return kernels;
+	}
 
 	/** Returns the learned filter biases.
 	 * @return the bias matrix
 	 */
-	public Matrix getBiases() { return biases; }
+	public Matrix getBiases() {
+		materializeParameters();
+		return biases;
+	}
 
 	/** Returns the activation function used by this layer.
 	 * @return the activation function
