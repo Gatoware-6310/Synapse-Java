@@ -1,14 +1,11 @@
 package xyz.gatoware.synapse.backend;
 
 import jcuda.Pointer;
-import jcuda.Sizeof;
 import jcuda.driver.CUfunction;
 import jcuda.driver.CUmodule;
 import jcuda.driver.JCudaDriver;
 import jcuda.nvrtc.JNvrtc;
 import jcuda.nvrtc.nvrtcProgram;
-import jcuda.runtime.JCuda;
-import jcuda.runtime.cudaMemcpyKind;
 import xyz.gatoware.synapse.Synapse;
 import xyz.gatoware.synapse.matrix.Matrix;
 import xyz.gatoware.synapse.optimizer.Optimizer;
@@ -254,7 +251,6 @@ public final class CudaCnnOps {
 		attempted = true;
 		nvrtcProgram program = new nvrtcProgram();
 		try {
-			JCuda.setExceptionsEnabled(true);
 			JNvrtc.setExceptionsEnabled(true);
 			JCudaDriver.setExceptionsEnabled(true);
 			JCudaDriver.cuInit(0);
@@ -291,255 +287,189 @@ public final class CudaCnnOps {
 		return result;
 	}
 
-	/** Runs a batched ReLU convolution on CUDA.
-	 * @param input flattened channel-first input matrix
-	 * @param kernels convolution kernels
-	 * @param biases filter biases
-	 * @param inW input width
-	 * @param inH input height
-	 * @param inC input channels
-	 * @param filters filter count
-	 * @param kernelSize square kernel size
-	 * @param stride convolution stride
-	 * @param outW output width
-	 * @param outH output height
-	 * @param padLeft left padding
-	 * @param padTop top padding
-	 * @return convolution output
-	 */
+	/** Runs a batched ReLU convolution on CUDA without materializing the result on the CPU. */
 	public static Matrix convReluForward(Matrix input, Matrix kernels, Matrix biases,
 			int inW, int inH, int inC, int filters, int kernelSize, int stride,
 			int outW, int outH, int padLeft, int padTop) {
 		requireAvailable();
-		int batch = input.columns();
-		int outputRows = filters * outW * outH;
-		Pointer dInput = upload(input);
-		Pointer dKernels = upload(kernels);
-		Pointer dBiases = upload(biases);
-		Pointer dOutput = allocate((long) outputRows * batch);
-		try {
-			Pointer params = Pointer.to(Pointer.to(dInput), Pointer.to(dKernels), Pointer.to(dBiases), Pointer.to(dOutput),
-				intArg(inW), intArg(inH), intArg(inC), intArg(filters), intArg(kernelSize), intArg(stride),
-				intArg(outW), intArg(outH), intArg(padLeft), intArg(padTop), intArg(batch));
-			launch(convForward, outputRows * batch, params);
-			return download(dOutput, outputRows, batch);
-		} finally {
-			free(dInput, dKernels, dBiases, dOutput);
+		CudaBackend cuda = backend();
+		synchronized (cuda) {
+			int batch = input.columns();
+			int outputRows = filters * outW * outH;
+			CudaBackend.DeviceBuffer dInput = cuda.device(input);
+			CudaBackend.DeviceBuffer dKernels = cuda.device(kernels);
+			CudaBackend.DeviceBuffer dBiases = cuda.device(biases);
+			CudaBackend.DeviceBuffer dOutput = cuda.temporary(outputRows * batch);
+			boolean outputOwned = true;
+			try {
+				Pointer params = Pointer.to(Pointer.to(dInput.pointer), Pointer.to(dKernels.pointer),
+					Pointer.to(dBiases.pointer), Pointer.to(dOutput.pointer), intArg(inW), intArg(inH),
+					intArg(inC), intArg(filters), intArg(kernelSize), intArg(stride), intArg(outW),
+					intArg(outH), intArg(padLeft), intArg(padTop), intArg(batch));
+				launch(convForward, outputRows * batch, params);
+				Matrix result = cuda.resident(dOutput, outputRows, batch);
+				outputOwned = false;
+				return result;
+			} finally {
+				if (outputOwned) cuda.releaseTemporary(dOutput);
+			}
 		}
 	}
 
-	/** Runs ReLU convolution backpropagation and parameter updates on CUDA.
-	 * @param input input from the matching forward pass
-	 * @param output ReLU output from the matching forward pass
-	 * @param outputGradient gradient at the convolution output
-	 * @param kernels convolution kernels
-	 * @param biases filter biases
-	 * @param inW input width
-	 * @param inH input height
-	 * @param inC input channels
-	 * @param filters filter count
-	 * @param kernelSize square kernel size
-	 * @param stride convolution stride
-	 * @param outW output width
-	 * @param outH output height
-	 * @param padLeft left padding
-	 * @param padTop top padding
-	 * @param optimizer optimizer used to update kernels and biases
-	 * @param learningRate training learning rate
-	 * @return gradient with respect to the convolution input
-	 */
+	/** Runs ReLU convolution backpropagation, gradients, and optimizer updates entirely on CUDA. */
 	public static Matrix convReluBackwardUpdate(Matrix input, Matrix output, Matrix outputGradient,
 			Matrix kernels, Matrix biases, int inW, int inH, int inC, int filters,
 			int kernelSize, int stride, int outW, int outH, int padLeft, int padTop,
 			Optimizer optimizer, float learningRate) {
 		requireAvailable();
-		int batch = input.columns();
-		int inputRows = inW * inH * inC;
-		int outputRows = filters * outW * outH;
-		int kernelValues = inC * kernelSize * kernelSize;
-		Pointer dInput = upload(input);
-		Pointer dOutput = upload(output);
-		Pointer dOutputGradient = upload(outputGradient);
-		Pointer dKernels = upload(kernels);
-		Pointer dInputGradient = allocate((long) inputRows * batch);
-		Pointer dKernelGradient = allocate((long) filters * kernelValues);
-		Pointer dBiasGradient = allocate(filters);
-		try {
-			JCuda.cudaMemset(dInputGradient, 0, (long) inputRows * batch * Sizeof.FLOAT);
-			Pointer inputParams = Pointer.to(Pointer.to(dOutput), Pointer.to(dOutputGradient), Pointer.to(dKernels),
-				Pointer.to(dInputGradient), intArg(inW), intArg(inH), intArg(inC), intArg(filters),
-				intArg(kernelSize), intArg(stride), intArg(outW), intArg(outH), intArg(padLeft), intArg(padTop), intArg(batch));
-			launch(convInputGradient, outputRows * batch, inputParams);
-			Pointer kernelParams = Pointer.to(Pointer.to(dInput), Pointer.to(dOutput), Pointer.to(dOutputGradient),
-				Pointer.to(dKernelGradient), intArg(inW), intArg(inH), intArg(inC), intArg(filters),
-				intArg(kernelSize), intArg(stride), intArg(outW), intArg(outH), intArg(padLeft), intArg(padTop), intArg(batch));
-			launch(convKernelGradient, filters * kernelValues, kernelParams);
-			Pointer biasParams = Pointer.to(Pointer.to(dOutput), Pointer.to(dOutputGradient), Pointer.to(dBiasGradient),
-				intArg(filters), intArg(outW), intArg(outH), intArg(batch));
-			launch(convBiasGradient, filters, biasParams);
-			Matrix kernelGradient = download(dKernelGradient, filters, kernelValues);
-			Matrix biasGradient = download(dBiasGradient, filters, 1);
-			Matrix inputGradient = download(dInputGradient, inputRows, batch);
-			optimizer.update(kernels, kernelGradient, learningRate);
-			optimizer.update(biases, biasGradient, learningRate);
-			kernels.markDirty();
-			biases.markDirty();
-			return inputGradient;
-		} finally {
-			free(dInput, dOutput, dOutputGradient, dKernels, dInputGradient, dKernelGradient, dBiasGradient);
+		CudaBackend cuda = backend();
+		synchronized (cuda) {
+			int batch = input.columns();
+			int inputRows = inW * inH * inC;
+			int outputRows = filters * outW * outH;
+			int kernelValues = inC * kernelSize * kernelSize;
+			CudaBackend.DeviceBuffer dInput = cuda.device(input);
+			CudaBackend.DeviceBuffer dOutput = cuda.device(output);
+			CudaBackend.DeviceBuffer dOutputGradient = cuda.device(outputGradient);
+			CudaBackend.DeviceBuffer dKernels = cuda.device(kernels);
+			CudaBackend.DeviceBuffer dInputGradient = cuda.temporary(inputRows * batch);
+			CudaBackend.DeviceBuffer dKernelGradient = cuda.temporary(filters * kernelValues);
+			CudaBackend.DeviceBuffer dBiasGradient = cuda.temporary(filters);
+			boolean inputGradientOwned = true;
+			try {
+				cuda.zero(dInputGradient);
+				Pointer inputParams = Pointer.to(Pointer.to(dOutput.pointer), Pointer.to(dOutputGradient.pointer),
+					Pointer.to(dKernels.pointer), Pointer.to(dInputGradient.pointer), intArg(inW), intArg(inH),
+					intArg(inC), intArg(filters), intArg(kernelSize), intArg(stride), intArg(outW), intArg(outH),
+					intArg(padLeft), intArg(padTop), intArg(batch));
+				launch(convInputGradient, outputRows * batch, inputParams);
+				Pointer kernelParams = Pointer.to(Pointer.to(dInput.pointer), Pointer.to(dOutput.pointer),
+					Pointer.to(dOutputGradient.pointer), Pointer.to(dKernelGradient.pointer), intArg(inW), intArg(inH),
+					intArg(inC), intArg(filters), intArg(kernelSize), intArg(stride), intArg(outW), intArg(outH),
+					intArg(padLeft), intArg(padTop), intArg(batch));
+				launch(convKernelGradient, filters * kernelValues, kernelParams);
+				Pointer biasParams = Pointer.to(Pointer.to(dOutput.pointer), Pointer.to(dOutputGradient.pointer),
+					Pointer.to(dBiasGradient.pointer), intArg(filters), intArg(outW), intArg(outH), intArg(batch));
+				launch(convBiasGradient, filters, biasParams);
+				cuda.updateResident(kernels, dKernelGradient, optimizer, learningRate);
+				cuda.updateResident(biases, dBiasGradient, optimizer, learningRate);
+				Matrix result = cuda.resident(dInputGradient, inputRows, batch);
+				inputGradientOwned = false;
+				return result;
+			} finally {
+				if (inputGradientOwned) cuda.releaseTemporary(dInputGradient);
+				cuda.releaseTemporary(dKernelGradient);
+				cuda.releaseTemporary(dBiasGradient);
+			}
 		}
 	}
 
-	/** Runs batched max pooling on CUDA.
-	 * @param input flattened channel-first input matrix
-	 * @param inW input width
-	 * @param inH input height
-	 * @param channels channel count
-	 * @param pool pooling window size
-	 * @param stride pooling stride
-	 * @param outW output width
-	 * @param outH output height
-	 * @return pooled output
-	 */
+	/** Runs batched max pooling on CUDA and keeps the result resident. */
 	public static Matrix maxPoolForward(Matrix input, int inW, int inH, int channels,
 			int pool, int stride, int outW, int outH) {
 		return poolForward(input, inW, inH, channels, pool, stride, outW, outH, true);
 	}
 
-	/** Runs max-pooling backpropagation on CUDA.
-	 * @param input input from the matching forward pass
-	 * @param outputGradient gradient at the pooling output
-	 * @param inW input width
-	 * @param inH input height
-	 * @param channels channel count
-	 * @param pool pooling window size
-	 * @param stride pooling stride
-	 * @param outW output width
-	 * @param outH output height
-	 * @return gradient with respect to the pooling input
-	 */
+	/** Runs max-pooling backpropagation on CUDA and keeps the input gradient resident. */
 	public static Matrix maxPoolBackward(Matrix input, Matrix outputGradient, int inW, int inH, int channels,
 			int pool, int stride, int outW, int outH) {
 		requireAvailable();
-		int batch = input.columns();
-		int inputRows = inW * inH * channels;
-		int outputRows = outW * outH * channels;
-		Pointer dInput = upload(input);
-		Pointer dGradient = upload(outputGradient);
-		Pointer dInputGradient = allocate((long) inputRows * batch);
-		try {
-			JCuda.cudaMemset(dInputGradient, 0, (long) inputRows * batch * Sizeof.FLOAT);
-			Pointer params = Pointer.to(Pointer.to(dInput), Pointer.to(dGradient), Pointer.to(dInputGradient),
-				intArg(inW), intArg(inH), intArg(channels), intArg(pool), intArg(stride), intArg(outW), intArg(outH), intArg(batch));
-			launch(maxPoolBackward, outputRows * batch, params);
-			return download(dInputGradient, inputRows, batch);
-		} finally {
-			free(dInput, dGradient, dInputGradient);
+		CudaBackend cuda = backend();
+		synchronized (cuda) {
+			int batch = input.columns();
+			int inputRows = inW * inH * channels;
+			int outputRows = outW * outH * channels;
+			CudaBackend.DeviceBuffer dInput = cuda.device(input);
+			CudaBackend.DeviceBuffer dGradient = cuda.device(outputGradient);
+			CudaBackend.DeviceBuffer dInputGradient = cuda.temporary(inputRows * batch);
+			boolean owned = true;
+			try {
+				cuda.zero(dInputGradient);
+				Pointer params = Pointer.to(Pointer.to(dInput.pointer), Pointer.to(dGradient.pointer),
+					Pointer.to(dInputGradient.pointer), intArg(inW), intArg(inH), intArg(channels), intArg(pool),
+					intArg(stride), intArg(outW), intArg(outH), intArg(batch));
+				launch(maxPoolBackward, outputRows * batch, params);
+				Matrix result = cuda.resident(dInputGradient, inputRows, batch);
+				owned = false;
+				return result;
+			} finally {
+				if (owned) cuda.releaseTemporary(dInputGradient);
+			}
 		}
 	}
 
-	/** Runs batched average pooling on CUDA.
-	 * @param input flattened channel-first input matrix
-	 * @param inW input width
-	 * @param inH input height
-	 * @param channels channel count
-	 * @param pool pooling window size
-	 * @param stride pooling stride
-	 * @param outW output width
-	 * @param outH output height
-	 * @return pooled output
-	 */
+	/** Runs batched average pooling on CUDA and keeps the result resident. */
 	public static Matrix avgPoolForward(Matrix input, int inW, int inH, int channels,
 			int pool, int stride, int outW, int outH) {
 		return poolForward(input, inW, inH, channels, pool, stride, outW, outH, false);
 	}
 
-	/** Runs average-pooling backpropagation on CUDA.
-	 * @param outputGradient gradient at the pooling output
-	 * @param inW input width
-	 * @param inH input height
-	 * @param channels channel count
-	 * @param pool pooling window size
-	 * @param stride pooling stride
-	 * @param outW output width
-	 * @param outH output height
-	 * @return gradient with respect to the pooling input
-	 */
+	/** Runs average-pooling backpropagation on CUDA and keeps the input gradient resident. */
 	public static Matrix avgPoolBackward(Matrix outputGradient, int inW, int inH, int channels,
 			int pool, int stride, int outW, int outH) {
 		requireAvailable();
-		int batch = outputGradient.columns();
-		int inputRows = inW * inH * channels;
-		int outputRows = outW * outH * channels;
-		Pointer dGradient = upload(outputGradient);
-		Pointer dInputGradient = allocate((long) inputRows * batch);
-		try {
-			JCuda.cudaMemset(dInputGradient, 0, (long) inputRows * batch * Sizeof.FLOAT);
-			Pointer params = Pointer.to(Pointer.to(dGradient), Pointer.to(dInputGradient),
-				intArg(inW), intArg(inH), intArg(channels), intArg(pool), intArg(stride), intArg(outW), intArg(outH), intArg(batch));
-			launch(avgPoolBackward, outputRows * batch, params);
-			return download(dInputGradient, inputRows, batch);
-		} finally {
-			free(dGradient, dInputGradient);
+		CudaBackend cuda = backend();
+		synchronized (cuda) {
+			int batch = outputGradient.columns();
+			int inputRows = inW * inH * channels;
+			int outputRows = outW * outH * channels;
+			CudaBackend.DeviceBuffer dGradient = cuda.device(outputGradient);
+			CudaBackend.DeviceBuffer dInputGradient = cuda.temporary(inputRows * batch);
+			boolean owned = true;
+			try {
+				cuda.zero(dInputGradient);
+				Pointer params = Pointer.to(Pointer.to(dGradient.pointer), Pointer.to(dInputGradient.pointer),
+					intArg(inW), intArg(inH), intArg(channels), intArg(pool), intArg(stride), intArg(outW),
+					intArg(outH), intArg(batch));
+				launch(avgPoolBackward, outputRows * batch, params);
+				Matrix result = cuda.resident(dInputGradient, inputRows, batch);
+				owned = false;
+				return result;
+			} finally {
+				if (owned) cuda.releaseTemporary(dInputGradient);
+			}
 		}
 	}
 
 	private static Matrix poolForward(Matrix input, int inW, int inH, int channels,
 			int pool, int stride, int outW, int outH, boolean max) {
 		requireAvailable();
-		int batch = input.columns();
-		int outputRows = outW * outH * channels;
-		Pointer dInput = upload(input);
-		Pointer dOutput = allocate((long) outputRows * batch);
-		try {
-			Pointer params = Pointer.to(Pointer.to(dInput), Pointer.to(dOutput), intArg(inW), intArg(inH),
-				intArg(channels), intArg(pool), intArg(stride), intArg(outW), intArg(outH), intArg(batch));
-			launch(max ? maxPoolForward : avgPoolForward, outputRows * batch, params);
-			return download(dOutput, outputRows, batch);
-		} finally {
-			free(dInput, dOutput);
+		CudaBackend cuda = backend();
+		synchronized (cuda) {
+			int batch = input.columns();
+			int outputRows = outW * outH * channels;
+			CudaBackend.DeviceBuffer dInput = cuda.device(input);
+			CudaBackend.DeviceBuffer dOutput = cuda.temporary(outputRows * batch);
+			boolean owned = true;
+			try {
+				Pointer params = Pointer.to(Pointer.to(dInput.pointer), Pointer.to(dOutput.pointer), intArg(inW),
+					intArg(inH), intArg(channels), intArg(pool), intArg(stride), intArg(outW), intArg(outH), intArg(batch));
+				launch(max ? maxPoolForward : avgPoolForward, outputRows * batch, params);
+				Matrix result = cuda.resident(dOutput, outputRows, batch);
+				owned = false;
+				return result;
+			} finally {
+				if (owned) cuda.releaseTemporary(dOutput);
+			}
 		}
+	}
+
+	private static CudaBackend backend() {
+		if (!(Synapse.backend() instanceof CudaBackend cuda))
+			throw new IllegalStateException("CUDA CNN operations require the CUDA backend");
+		return cuda;
 	}
 
 	private static void requireAvailable() {
 		if (!isAvailable()) throw new IllegalStateException("CUDA CNN kernels are unavailable");
 	}
 
-	private static Pointer upload(Matrix matrix) {
-		if (Synapse.backend() instanceof CudaBackend cuda) cuda.materialize(matrix);
-		float[] values = new float[matrix.rows() * matrix.columns()];
-		for (int row = 0; row < matrix.rows(); row++)
-			System.arraycopy(matrix.values[row], 0, values, row * matrix.columns(), matrix.columns());
-		Pointer pointer = allocate(values.length);
-		JCuda.cudaMemcpy(pointer, Pointer.to(values), (long) values.length * Sizeof.FLOAT,
-			cudaMemcpyKind.cudaMemcpyHostToDevice);
-		return pointer;
+	private static Pointer intArg(int value) {
+		return Pointer.to(new int[] {value});
 	}
-
-	private static Matrix download(Pointer pointer, int rows, int columns) {
-		float[] values = new float[rows * columns];
-		JCuda.cudaMemcpy(Pointer.to(values), pointer, (long) values.length * Sizeof.FLOAT,
-			cudaMemcpyKind.cudaMemcpyDeviceToHost);
-		Matrix result = new Matrix(rows, columns);
-		for (int row = 0; row < rows; row++)
-			System.arraycopy(values, row * columns, result.values[row], 0, columns);
-		return result;
-	}
-
-	private static Pointer allocate(long elements) {
-		Pointer pointer = new Pointer();
-		JCuda.cudaMalloc(pointer, elements * Sizeof.FLOAT);
-		return pointer;
-	}
-
-	private static Pointer intArg(int value) { return Pointer.to(new int[] {value}); }
 
 	private static void launch(CUfunction function, int count, Pointer params) {
 		int blocks = (count + BLOCK_SIZE - 1) / BLOCK_SIZE;
 		JCudaDriver.cuLaunchKernel(function, blocks, 1, 1, BLOCK_SIZE, 1, 1, 0, null, params, null);
-	}
-
-	private static void free(Pointer... pointers) {
-		for (Pointer pointer : pointers) if (pointer != null) JCuda.cudaFree(pointer);
 	}
 }
