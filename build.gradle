@@ -21,18 +21,22 @@ repositories {
 
 def getJcudaOs() {
     String osName = System.getProperty('os.name').toLowerCase(Locale.ENGLISH)
+
     if (osName.startsWith('windows')) return 'windows'
     if (osName.startsWith('linux')) return 'linux'
     if (osName.startsWith('mac os')) return 'apple'
+
     return null
 }
 
 def getJcudaArch() {
     String osArch = System.getProperty('os.arch').toLowerCase(Locale.ENGLISH)
+
     if (osArch == 'amd64' || osArch.startsWith('x86_64')) return 'x86_64'
     if (osArch == 'i386' || osArch == 'x86' || osArch == 'i686') return 'x86'
     if (osArch == 'aarch64' || osArch.startsWith('arm64')) return 'arm64'
     if (osArch.startsWith('arm')) return 'arm'
+
     return null
 }
 
@@ -41,17 +45,20 @@ dependencies {
     def jcudaOs = getJcudaOs()
     def jcudaArch = getJcudaArch()
 
-    // Java bindings. Native libraries are selected separately because Gradle does
-    // not process JCuda's Maven profiles for platform-specific classifiers.
+    // Java bindings.
     implementation("org.jcuda:jcuda:${jcudaVersion}") {
         transitive = false
     }
+
     implementation("org.jcuda:jcublas:${jcudaVersion}") {
         transitive = false
     }
 
+    // Include the native JCuda libraries for the platform on which
+    // Synapse is being built.
     if (jcudaOs != null && jcudaArch != null) {
         def classifier = "${jcudaOs}-${jcudaArch}"
+
         runtimeOnly "org.jcuda:jcuda-natives:${jcudaVersion}:${classifier}"
         runtimeOnly "org.jcuda:jcublas-natives:${jcudaVersion}:${classifier}"
     }
@@ -59,9 +66,9 @@ dependencies {
 
 testing {
     suites {
-        // Configure the built-in test suite
+        // Configure the built-in test suite.
         test {
-            // Use JUnit Jupiter test framework
+            // Use JUnit Jupiter test framework.
             useJUnitJupiter('5.12.1')
         }
     }
@@ -77,21 +84,30 @@ java {
     }
 }
 
-// Experimental convenience artifact for manually testing Synapse without
-// separately placing JCuda jars on the runtime classpath.
-tasks.register('fatJar', Jar) {
-    archiveClassifier = 'all'
+/*
+ * Build the main Synapse JAR as a standalone JAR.
+ *
+ * JCuda, JCublas, and their platform-specific native libraries are bundled
+ * directly into Synapse-Java-<version>.jar, so users do not need to add
+ * separate JCuda dependencies to their classpath.
+ */
+tasks.named('jar', Jar) {
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
     dependsOn configurations.runtimeClasspath
-    from sourceSets.main.output
+
     from {
-        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+        configurations.runtimeClasspath.collect {
+            it.isDirectory() ? it : zipTree(it)
+        }
     }
+
+    // Dependency JAR signatures are invalid once their contents are merged.
     exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA'
 }
 
 tasks.register('runMain', JavaExec) {
-    classpath = sourceSets.test.runtimeClasspath;
+    classpath = sourceSets.test.runtimeClasspath
     mainClass = 'Main'
 }
 
