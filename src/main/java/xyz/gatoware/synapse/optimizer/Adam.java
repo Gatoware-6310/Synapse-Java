@@ -24,7 +24,14 @@ public class Adam implements Optimizer {
 		}
 	}
 
+	/** Creates an Adam optimizer with the default beta and epsilon values. */
 	public Adam() { this(0.9f, 0.999f, 1e-7f); }
+
+	/** Creates an Adam optimizer.
+	 * @param beta1 decay rate for the first gradient moment
+	 * @param beta2 decay rate for the second gradient moment
+	 * @param epsilon small positive value used to avoid division by zero
+	 */
 	public Adam(float beta1, float beta2, float epsilon) {
 		if (!Float.isFinite(beta1) || beta1 < 0.0f || beta1 >= 1.0f)
 			throw new IllegalArgumentException("Beta1 must be finite and in [0, 1)");
@@ -37,8 +44,19 @@ public class Adam implements Optimizer {
 		this.epsilon = epsilon;
 	}
 
+	/** Returns the first-moment decay rate.
+	 * @return the beta1 value
+	 */
 	public float getBeta1() { return beta1; }
+
+	/** Returns the second-moment decay rate.
+	 * @return the beta2 value
+	 */
 	public float getBeta2() { return beta2; }
+
+	/** Returns the epsilon value used by this optimizer.
+	 * @return the epsilon value
+	 */
 	public float getEpsilon() { return epsilon; }
 
 	@Override
