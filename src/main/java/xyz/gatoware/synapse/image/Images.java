@@ -15,12 +15,20 @@ public final class Images {
 	private Images() {
 	}
 
-	/** Loads an image as a normalized RGB matrix. */
+	/** Loads an image as a normalized RGB matrix.
+	 * @param filename path to the image file
+	 * @return the image as a normalized RGB matrix
+	 * @throws IOException if the image cannot be read or is unsupported
+	 */
 	public static Matrix load(String filename) throws IOException {
 		return load(Path.of(filename));
 	}
 
-	/** Loads an image as a normalized RGB matrix. */
+	/** Loads an image as a normalized RGB matrix.
+	 * @param path path to the image file
+	 * @return the image as a normalized RGB matrix
+	 * @throws IOException if the image cannot be read or is unsupported
+	 */
 	public static Matrix load(Path path) throws IOException {
 		BufferedImage image = ImageIO.read(path.toFile());
 		if (image == null)
@@ -28,12 +36,24 @@ public final class Images {
 		return fromBufferedImage(image);
 	}
 
-	/** Loads and resizes an image, returning a normalized RGB matrix. */
+	/** Loads and resizes an image, returning a normalized RGB matrix.
+	 * @param filename path to the image file
+	 * @param width output image width
+	 * @param height output image height
+	 * @return the resized image as a normalized RGB matrix
+	 * @throws IOException if the image cannot be read or is unsupported
+	 */
 	public static Matrix load(String filename, int width, int height) throws IOException {
 		return load(Path.of(filename), width, height);
 	}
 
-	/** Loads and resizes an image, returning a normalized RGB matrix. */
+	/** Loads and resizes an image, returning a normalized RGB matrix.
+	 * @param path path to the image file
+	 * @param width output image width
+	 * @param height output image height
+	 * @return the resized image as a normalized RGB matrix
+	 * @throws IOException if the image cannot be read or is unsupported
+	 */
 	public static Matrix load(Path path, int width, int height) throws IOException {
 		if (width <= 0 || height <= 0)
 			throw new IllegalArgumentException("Image dimensions must be positive");
@@ -45,14 +65,21 @@ public final class Images {
 		return fromBufferedImage(image);
 	}
 
-	/** Converts a BufferedImage to a normalized RGB matrix in channel-first order. */
+	/** Converts a BufferedImage to a normalized RGB matrix in channel-first order.
+	 * @param image image to convert
+	 * @return the image as a normalized three-channel matrix
+	 */
 	public static Matrix fromBufferedImage(BufferedImage image) {
 		if (image == null)
 			throw new IllegalArgumentException("Image cannot be null");
 		return fromBufferedImage(image, 3);
 	}
 
-	/** Converts a BufferedImage to a normalized one-channel or RGB matrix. */
+	/** Converts a BufferedImage to a normalized one-channel or RGB matrix.
+	 * @param image image to convert
+	 * @param channels number of output channels, either 1 for grayscale or 3 for RGB
+	 * @return the image as a normalized matrix
+	 */
 	public static Matrix fromBufferedImage(BufferedImage image, int channels) {
 		if (image == null)
 			throw new IllegalArgumentException("Image cannot be null");
@@ -83,7 +110,13 @@ public final class Images {
 		return matrix;
 	}
 
-	/** Converts a flattened one-channel or RGB matrix to a BufferedImage. */
+	/** Converts a flattened one-channel or RGB matrix to a BufferedImage.
+	 * @param matrix image values in flattened channel-first order
+	 * @param width image width
+	 * @param height image height
+	 * @param channels number of channels, either 1 for grayscale or 3 for RGB
+	 * @return a BufferedImage containing the matrix values
+	 */
 	public static BufferedImage toBufferedImage(Matrix matrix, int width, int height, int channels) {
 		if (matrix == null)
 			throw new IllegalArgumentException("Matrix cannot be null");
@@ -116,12 +149,26 @@ public final class Images {
 		return image;
 	}
 
-	/** Saves a flattened one-channel or RGB matrix as an image file. */
+	/** Saves a flattened one-channel or RGB matrix as an image file.
+	 * @param matrix image values in flattened channel-first order
+	 * @param width image width
+	 * @param height image height
+	 * @param channels number of channels, either 1 for grayscale or 3 for RGB
+	 * @param filename destination image filename
+	 * @throws IOException if the image cannot be written in the requested format
+	 */
 	public static void save(Matrix matrix, int width, int height, int channels, String filename) throws IOException {
 		save(matrix, width, height, channels, Path.of(filename));
 	}
 
-	/** Saves a flattened one-channel or RGB matrix as an image file. */
+	/** Saves a flattened one-channel or RGB matrix as an image file.
+	 * @param matrix image values in flattened channel-first order
+	 * @param width image width
+	 * @param height image height
+	 * @param channels number of channels, either 1 for grayscale or 3 for RGB
+	 * @param path destination image path
+	 * @throws IOException if the image cannot be written in the requested format
+	 */
 	public static void save(Matrix matrix, int width, int height, int channels, Path path) throws IOException {
 		BufferedImage image = toBufferedImage(matrix, width, height, channels);
 		String format = format(path);
