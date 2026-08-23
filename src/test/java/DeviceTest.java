@@ -13,6 +13,7 @@ import xyz.gatoware.synapse.activation.ReLU;
 import xyz.gatoware.synapse.activation.Softmax;
 import xyz.gatoware.synapse.backend.CudaBackend;
 import xyz.gatoware.synapse.dataset.Dataset;
+import xyz.gatoware.synapse.layer.Conv2DLayer;
 import xyz.gatoware.synapse.layer.DenseLayer;
 import xyz.gatoware.synapse.layer.Layer;
 import xyz.gatoware.synapse.matrix.Matrix;
@@ -148,6 +149,26 @@ public class DeviceTest {
 		float after = hidden.getWeights().values[0][0];
 		assertTrue(Float.isFinite(network.getLastLoss()));
 		assertNotEquals(before, after);
+	}
+
+	@Test
+	void mixedCnnCudaTrainingInitializesKernelsWhenAvailable() {
+		Assumptions.assumeTrue(Synapse.isDeviceAvailable(Devices.CUDA));
+		Synapse.useDevice(Devices.CUDA);
+
+		NeuralNetwork network = new NeuralNetwork(new Layer[] {
+			new Conv2DLayer(4, 4, 1, 1, 2, new ReLU()),
+			new DenseLayer(3 * 3, 2, new Softmax())
+		});
+		Dataset dataset = new Dataset(
+			new Matrix(new float[][] {
+				{0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0},
+				{1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1}
+			}),
+			new Matrix(new float[][] {{0}, {1}}));
+
+		network.fit(dataset, 1, 0.01f, new Adam(), 2);
+		assertTrue(Float.isFinite(network.getLastLoss()));
 	}
 
 	private static void assertMatrixEquals(Matrix expected, Matrix actual) {
