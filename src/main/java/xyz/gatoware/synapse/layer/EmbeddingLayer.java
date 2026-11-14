@@ -13,4 +13,5 @@ public final class EmbeddingLayer extends TrainableLayer {
         for(int t=0;t<tokens.length;t++){float v=input.values[0][t];int id=(int)v;if(v!=id||id<0||id>=weights.columns())throw new IllegalArgumentException("Token outside vocabulary");tokens[t]=id;for(int i=0;i<weights.rows();i++)out.values[i][t]=weights.values[i][id];}return out;
     }
     @Override public Matrix backwardGradient(Matrix g) { if(tokens==null)throw new IllegalStateException("Forward required");if(g.rows()!=weights.rows()||g.columns()!=tokens.length)throw new IllegalArgumentException();TransformerMath.host(g);Matrix dw=gradients.get(0);for(int t=0;t<tokens.length;t++)for(int i=0;i<weights.rows();i++)dw.values[i][tokens[t]]+=g.values[i][t];dw.markDirty();return new Matrix(1,tokens.length); }
+    @Override public void clearTrainingState(){tokens=null;}
 }

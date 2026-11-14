@@ -12,6 +12,8 @@ public abstract class TrainableLayer implements Layer {
     protected Matrix parameter(Matrix p) { parameters.add(p);gradients.add(new Matrix(p.rows(),p.columns()));return p; }
     public List<Matrix> parameters() { List<Matrix> p=new ArrayList<>(parameters);for(var c:children)p.addAll(c.parameters());return Collections.unmodifiableList(p); }
     public List<Matrix> gradients() { List<Matrix> p=new ArrayList<>(gradients);for(var c:children)p.addAll(c.gradients());return Collections.unmodifiableList(p); }
+    /** Releases forward intermediates, retaining parameters and accumulated gradients. */
+    public void clearTrainingState() { for(var c:children)c.clearTrainingState(); }
     public void zeroGrad() { for(Matrix g:gradients){TransformerMath.host(g); for(float[] r:g.values)Arrays.fill(r,0);g.markDirty();}for(var c:children)c.zeroGrad(); }
     /** Accumulates parameter gradients without applying an optimizer update. */
     public abstract Matrix backwardGradient(Matrix gradient);

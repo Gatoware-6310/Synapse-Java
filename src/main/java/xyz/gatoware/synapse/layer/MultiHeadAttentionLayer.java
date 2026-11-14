@@ -42,4 +42,5 @@ public final class MultiHeadAttentionLayer extends TrainableLayer {
         accumulate(gradients.get(0),mm(dq,transpose(input)));accumulate(gradients.get(1),mm(dk,transpose(input)));accumulate(gradients.get(2),mm(dv,transpose(input)));
         return add(add(mm(transpose(wq),dq),mm(transpose(wk),dk)),mm(transpose(wv),dv));
     }
+    @Override public void clearTrainingState(){input=null;q=null;k=null;v=null;attended=null;output=null;}
 }
