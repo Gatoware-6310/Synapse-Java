@@ -9,6 +9,7 @@ from pathlib import Path
 import statistics
 import subprocess
 import threading
+import tempfile
 import time
 
 p=argparse.ArgumentParser()
@@ -47,17 +48,21 @@ def execute(cmd):
     result['sampled_peak_board_memory_mib']=max(v[1] for v in samples) if samples else None
     return result
 
+temporary=tempfile.TemporaryDirectory(prefix="synapse-benchmark-")
+weights_path=Path(temporary.name)/"initial.snn"
+os.environ["SYNAPSE_BENCH_WEIGHTS_PATH"]=str(weights_path)
 values=[a.device,str(a.moe).lower(),a.sequence,a.vocabulary,a.hidden,a.layers,a.heads,a.kv_heads,a.ffn,a.warmup,a.repeats,a.decode_tokens,a.precision]
 synapse=execute([a.gradle,'--console=plain','transformerBenchmark','--args='+' '.join(map(str,values))])
-cmd=[a.python,str(root/'benchmarks/pytorch_transformer.py'),'--device',a.device.lower(),'--precision',a.precision]
+cmd=[a.python,str(root/'benchmarks/pytorch_transformer.py'),'--weights',str(weights_path),'--device',a.device.lower(),'--precision',a.precision]
 for key in ['sequence','vocabulary','hidden','layers','heads','kv_heads','ffn','warmup','repeats','decode_tokens']:cmd.extend(['--'+key.replace('_','-'),str(getattr(a,key))])
 if a.moe:cmd.append('--moe')
 pytorch=execute(cmd)
 for key in ['device','precision','moe','sequence','vocabulary','hidden','layers','heads','kv_heads','ffn','batch','decode_tokens','warmup','repeats','parameters']:
     if synapse[key]!=pytorch[key]:raise RuntimeError(f'Mismatched {key}: {synapse[key]} vs {pytorch[key]}')
+if abs(synapse['initial_loss']-pytorch['initial_loss']) > (.0001 if a.precision=='FP32' else .03):raise RuntimeError('Initial losses disagree; benchmark equivalence failed')
 ratios={key:synapse[key]/pytorch[key] for key in ['prefill_tokens_per_second','training_tokens_per_second','decode_tokens_per_second']}
 code_files=sorted([*root.glob('src/**/*.java'),*root.glob('src/**/*.cu'),*root.glob('benchmarks/*.py'),root/'build.gradle'])
 source_hash=hashlib.sha256()
 for code_file in code_files:source_hash.update(str(code_file.relative_to(root)).encode()+b'\0'+code_file.read_bytes())
-result=dict(source_sha256=source_hash.hexdigest(),working_tree_dirty=bool(subprocess.check_output(['git','status','--porcelain'],cwd=root,text=True).strip()),timestamp_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),methodology='Median synchronized wall-clock timings, sequential frameworks, batch=1, no sampling in decode; board monitoring includes process startup and other GPU processes if present.',synapse=synapse,pytorch=pytorch,synapse_over_pytorch=ratios)
-out=Path(a.output);out.parent.mkdir(parents=True,exist_ok=True);out.write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(ratios,indent=2))
+result=dict(initial_weights_sha256=hashlib.sha256(weights_path.read_bytes()).hexdigest(),source_sha256=source_hash.hexdigest(),working_tree_dirty=bool(subprocess.check_output(['git','status','--porcelain'],cwd=root,text=True).strip()),timestamp_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),methodology='Median synchronized wall-clock timings, sequential frameworks, batch=1, no sampling in decode; board monitoring includes process startup and other GPU processes if present.',synapse=synapse,pytorch=pytorch,synapse_over_pytorch=ratios)
+out=Path(a.output);out.parent.mkdir(parents=True,exist_ok=True);out.write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(ratios,indent=2));temporary.cleanup()

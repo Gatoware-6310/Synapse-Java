@@ -191,6 +191,35 @@ class TransformerTest {
     }
 
     @Test
+    void checkpointedCapacityMoEGradients() {
+        var config =
+                tiny().setMoE(
+                                new MoEConfig(3, 2)
+                                        .setSharedExperts(1)
+                                        .setLoadBalancing(.05f)
+                                        .setCapacityFactor(.5f));
+        Transformer a = new Transformer(config),
+                b = new Transformer(config.setActivationCheckpointing(true));
+        var ps = a.parameters();
+        var qs = b.parameters();
+        for (int p = 0; p < ps.size(); p++)
+            for (int r = 0; r < ps.get(p).rows(); r++)
+                System.arraycopy(
+                        ps.get(p).values[r], 0, qs.get(p).values[r], 0, ps.get(p).columns());
+        a.setTraining(true);
+        b.setTraining(true);
+        int[] tokens = {0, 1, 2, 3, 0};
+        same(a.forward(tokens), b.forward(tokens), 0);
+        Matrix g = TransformerLayerTest.input(4, 5);
+        a.zeroGrad();
+        b.zeroGrad();
+        a.backwardGradient(g);
+        b.backwardGradient(g);
+        for (int p = 0; p < a.gradients().size(); p++)
+            same(a.gradients().get(p), b.gradients().get(p), 1e-6f);
+    }
+
+    @Test
     void accumulationMatchesAverage() {
         Transformer a = new Transformer(tiny()), b = new Transformer(tiny());
         var ap = a.parameters();

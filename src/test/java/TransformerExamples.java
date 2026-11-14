@@ -80,7 +80,10 @@ public final class TransformerExamples {
                                 .setTopP(.95f));
         byte[] bytes = new byte[output.length];
         for (int i = 0; i < output.length; i++) bytes[i] = (byte) output[i];
-        System.out.println(new String(bytes, StandardCharsets.US_ASCII));
+        System.out.println(
+                example.equals("train")
+                        ? new String(bytes, StandardCharsets.US_ASCII)
+                        : Arrays.toString(output));
         System.out.println(
                 "Parameters: "
                         + model.parameterCount()

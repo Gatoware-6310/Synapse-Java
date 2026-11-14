@@ -360,6 +360,7 @@ public final class CudaBackend implements Backend {
 	}
 
 	void updateResident(Matrix parameters, DeviceBuffer gradients, Optimizer optimizer, float learningRate) {
+		if(!ensureKernels())throw new IllegalStateException("CUDA optimizer kernels are unavailable; check NVRTC installation");
 		DeviceBuffer parameterBuffer = getOrUpload(parameters.values, parameters.rows(), parameters.columns());
 		updateOptimizer(parameters.values, parameterBuffer, gradients, optimizer, learningRate);
 	}

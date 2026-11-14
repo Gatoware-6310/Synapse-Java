@@ -15,6 +15,7 @@ for name, default in [('sequence', 16), ('vocabulary', 32), ('hidden', 32), ('la
 p.add_argument('--device', choices=['cpu', 'cuda'], default='cpu')
 p.add_argument('--precision', choices=['FP32', 'FP16_COMPUTE'], default='FP32')
 p.add_argument('--moe', action='store_true')
+p.add_argument('--weights', help='Synapse SNT1 checkpoint for identical paired initialization')
 a = p.parse_args()
 if min(a.sequence, a.hidden, a.layers, a.heads, a.kv_heads, a.ffn, a.warmup, a.decode_tokens) < 1 or a.repeats < 3:
     raise ValueError('Invalid benchmark configuration')
@@ -123,7 +124,64 @@ class Model(nn.Module):
         return F.linear(self.norm(x), self.embedding.weight)
     def aux(self): return sum(b.ffn.aux for b in self.blocks) if a.moe else 0
 
-m = Model().to(a.device)
+def load_synapse_weights(model, path):
+    import array
+    import struct
+    import sys
+    with open(path, 'rb') as stream:
+        def integer(): return struct.unpack('>i', stream.read(4))[0]
+        def utf(): return stream.read(struct.unpack('>H', stream.read(2))[0]).decode('utf-8')
+        def boolean(): return stream.read(1) == b'\x01'
+        if integer() != 0x534e5431 or integer() != 2: raise ValueError('Unsupported benchmark checkpoint')
+        dims=[integer() for _ in range(7)]
+        if dims != [a.vocabulary,a.hidden,a.layers,a.heads,a.sequence+a.decode_tokens+1,a.kv_heads,a.ffn]: raise ValueError('Checkpoint dimensions mismatch')
+        if [utf(),utf(),utf()] != ['ROPE','RMS_NORM','SWIGLU']: raise ValueError('Checkpoint architecture mismatch')
+        if not boolean() or not boolean() or boolean(): raise ValueError('Checkpoint flags mismatch')
+        if utf() != a.precision: raise ValueError('Precision mismatch')
+        stream.read(4) # static loss scale
+        if utf() != 'FP32': raise ValueError('Benchmark expects FP32 KV cache')
+        moe=boolean()
+        if moe != a.moe: raise ValueError('MoE mismatch')
+        if moe:
+            expert_config=[integer() for _ in range(5)]
+            if expert_config != [4,2,0,1,1]: raise ValueError('Expert configuration mismatch')
+            stream.read(8) # balance/capacity
+            if utf() != 'TOP_K_SOFTMAX' or utf() != 'DROP': raise ValueError('Router mismatch')
+            count=integer()
+            if count != -1: raise ValueError('Benchmark expects all-layer MoE')
+        count=integer()
+        tensors=[]
+        for _ in range(count):
+            rows,cols=integer(),integer()
+            data=array.array('f');data.frombytes(stream.read(rows*cols*4))
+            if sys.byteorder=='little':data.byteswap()
+            tensors.append(torch.tensor(data.tolist()).view(rows,cols))
+        if stream.read(1): raise ValueError('Trailing checkpoint bytes')
+    parameters=iter(tensors)
+    def copy(destination,transpose=False,vector=False):
+        source=next(parameters)
+        if transpose:source=source.T
+        if vector:source=source[:,0]
+        if source.shape != destination.shape:raise ValueError('Parameter shape mismatch')
+        destination.copy_(source)
+    def ffn(layer):
+        copy(layer.up.weight);copy(layer.down.weight);copy(layer.gate.weight)
+    with torch.no_grad():
+        copy(model.embedding.weight,transpose=True)
+        for block in model.blocks:
+            for layer in [block.q,block.k,block.v,block.o]:copy(layer.weight)
+            copy(block.n1.weight,vector=True);copy(block.n2.weight,vector=True)
+            if moe:
+                copy(block.ffn.router.weight)
+                for expert in block.ffn.experts:ffn(expert)
+                ffn(block.ffn.shared)
+            else:ffn(block.ffn)
+        copy(model.norm.weight,vector=True)
+    if next(parameters,None) is not None:raise ValueError('Unused checkpoint parameters')
+
+m = Model()
+if a.weights:load_synapse_weights(m,a.weights)
+m=m.to(a.device)
 ids = torch.arange(a.sequence+1, device=a.device)[None] % a.vocabulary
 x, labels = ids[:, :-1], ids[:, 1:]
 optimizer = torch.optim.AdamW(m.parameters(), lr=.0003, eps=1e-7, weight_decay=.01)
@@ -155,6 +213,9 @@ def train():
     torch.nn.utils.clip_grad_norm_(m.parameters(), 1)
     optimizer.step()
 
+with torch.no_grad(), amp():
+    initial_output=m(x)
+    initial_loss=float(F.cross_entropy(initial_output.float().reshape(-1,a.vocabulary),labels.reshape(-1))+m.aux())
 if a.device == 'cuda': torch.cuda.reset_peak_memory_stats()
 prefill_ms = measure(prefill)
 backward_samples = []
@@ -178,4 +239,4 @@ with torch.no_grad():
             sync()
         if i >= 0: decode_samples.append((time.perf_counter()-start)*1000)
 decode_ms = statistics.median(decode_samples)
-print(json.dumps(dict(framework='pytorch', device=a.device.upper(), precision=a.precision, moe=a.moe, sequence=a.sequence, vocabulary=a.vocabulary, hidden=a.hidden, layers=a.layers, heads=a.heads, kv_heads=a.kv_heads, ffn=a.ffn, batch=1, decode_tokens=a.decode_tokens, warmup=a.warmup, repeats=a.repeats, parameters=sum(p.numel() for p in m.parameters()), prefill_ms=prefill_ms, backward_ms=statistics.median(backward_samples), train_ms=train_ms, decode_ms=decode_ms, prefill_tokens_per_second=a.sequence*1000/prefill_ms, training_tokens_per_second=a.sequence*1000/train_ms, decode_tokens_per_second=a.decode_tokens*1000/decode_ms, peak_torch_allocated_bytes=torch.cuda.max_memory_allocated() if a.device=='cuda' else None, environment=dict(torch=torch.__version__, cuda=torch.version.cuda, gpu=torch.cuda.get_device_name() if a.device=='cuda' else None, python=platform.python_version(), cpu_threads=1))))
+print(json.dumps(dict(framework='pytorch', device=a.device.upper(), precision=a.precision, moe=a.moe, sequence=a.sequence, vocabulary=a.vocabulary, hidden=a.hidden, layers=a.layers, heads=a.heads, kv_heads=a.kv_heads, ffn=a.ffn, batch=1, decode_tokens=a.decode_tokens, warmup=a.warmup, repeats=a.repeats, parameters=sum(p.numel() for p in m.parameters()), initial_loss=initial_loss, prefill_ms=prefill_ms, backward_ms=statistics.median(backward_samples), train_ms=train_ms, decode_ms=decode_ms, prefill_tokens_per_second=a.sequence*1000/prefill_ms, training_tokens_per_second=a.sequence*1000/train_ms, decode_tokens_per_second=a.decode_tokens*1000/decode_ms, peak_torch_allocated_bytes=torch.cuda.max_memory_allocated() if a.device=='cuda' else None, environment=dict(torch=torch.__version__, cuda=torch.version.cuda, gpu=torch.cuda.get_device_name() if a.device=='cuda' else None, python=platform.python_version(), cpu_threads=1))))

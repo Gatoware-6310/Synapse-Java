@@ -33,7 +33,7 @@ public final class TransformerBenchmark {
         return samples[samples.length / 2];
     }
 
-    public static void main(String[] a) {
+    public static void main(String[] a) throws Exception {
         // device moe sequence vocabulary hidden layers heads kv ffn warmup repeats decode precision
         if (a.length != 13)
             throw new IllegalArgumentException("Expected 13 arguments; see benchmarks/README.md");
@@ -61,12 +61,27 @@ public final class TransformerBenchmark {
                         .setPrecision(precision);
         if (moe) c.setMoE(new MoEConfig(4, 2).setSharedExperts(1).setLoadBalancing(.01f));
         Transformer m = new Transformer(c);
+        Random initialization = new Random(7);
+        for (Matrix parameter : m.parameters()) {
+            for (float[] row : parameter.values)
+                for (int j = 0; j < row.length; j++)
+                    row[j] =
+                            parameter.columns() == 1
+                                    ? 1f
+                                    : (float)
+                                            ((initialization.nextDouble() * 2 - 1)
+                                                    / Math.sqrt(parameter.columns()));
+            parameter.markDirty();
+        }
+        String weightsPath = System.getenv("SYNAPSE_BENCH_WEIGHTS_PATH");
+        if (weightsPath != null) m.save(weightsPath);
         int[] tokens = new int[seq], training = new int[seq + 1];
         for (int i = 0; i < training.length; i++) training[i] = i % vocab;
         System.arraycopy(training, 0, tokens, 0, seq);
         Matrix delta = new Matrix(vocab, seq);
         for (float[] row : delta.values) Arrays.fill(row, 1f / (vocab * seq));
         AdamW optimizer = new AdamW();
+        float initialLoss = m.loss(training);
         double prefill = measure(() -> m.forward(tokens), warmup, repeats);
         double[] back = new double[repeats];
         for (int i = -warmup; i < repeats; i++) {
@@ -106,7 +121,7 @@ public final class TransformerBenchmark {
                 Synapse.backend() instanceof CudaBackend cuda ? cuda.getPeakAllocatedBytes() : 0;
         System.out.printf(
                 Locale.ROOT,
-                "{\"framework\":\"synapse\",\"device\":\"%s\",\"precision\":\"%s\",\"moe\":%s,\"sequence\":%d,\"vocabulary\":%d,\"hidden\":%d,\"layers\":%d,\"heads\":%d,\"kv_heads\":%d,\"ffn\":%d,\"batch\":1,\"decode_tokens\":%d,\"warmup\":%d,\"repeats\":%d,\"parameters\":%d,\"prefill_ms\":%.6f,\"backward_ms\":%.6f,\"train_ms\":%.6f,\"decode_ms\":%.6f,\"prefill_tokens_per_second\":%.3f,\"training_tokens_per_second\":%.3f,\"decode_tokens_per_second\":%.3f,\"owned_peak_cuda_bytes\":%d,\"environment\":\"%s\"}%n",
+                "{\"framework\":\"synapse\",\"device\":\"%s\",\"precision\":\"%s\",\"moe\":%s,\"sequence\":%d,\"vocabulary\":%d,\"hidden\":%d,\"layers\":%d,\"heads\":%d,\"kv_heads\":%d,\"ffn\":%d,\"batch\":1,\"decode_tokens\":%d,\"warmup\":%d,\"repeats\":%d,\"parameters\":%d,\"initial_loss\":%.9f,\"prefill_ms\":%.6f,\"backward_ms\":%.6f,\"train_ms\":%.6f,\"decode_ms\":%.6f,\"prefill_tokens_per_second\":%.3f,\"training_tokens_per_second\":%.3f,\"decode_tokens_per_second\":%.3f,\"owned_peak_cuda_bytes\":%d,\"environment\":\"%s\"}%n",
                 a[0],
                 precision,
                 moe,
@@ -121,6 +136,7 @@ public final class TransformerBenchmark {
                 warmup,
                 repeats,
                 m.parameterCount(),
+                initialLoss,
                 prefill,
                 backward,
                 trainingMs,
