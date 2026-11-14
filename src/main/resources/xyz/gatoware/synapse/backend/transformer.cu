@@ -1,3 +1,8 @@
+// Header-free IEEE half conversion uses CUDA PTX instructions (NVRTC does not need toolkit headers).
+__device__ unsigned short to_half(float value){unsigned short result;asm("cvt.rn.f16.f32 %0, %1;" : "=h"(result) : "f"(value));return result;}
+__device__ float from_half(unsigned short value){float result;asm("cvt.f32.f16 %0, %1;" : "=f"(result) : "h"(value));return result;}
+__device__ float cache_read(const float* ptr,int index,int half){return half?from_half(((const unsigned short*)ptr)[index]):ptr[index];}
+extern "C" __global__ void cache_append(const float* x,float* cache,int rows,int width,int context,int offset,int half){int i=blockIdx.x*blockDim.x+threadIdx.x;if(i<rows*width){int j=(i/width)*context+offset+i%width;if(half)((unsigned short*)cache)[j]=to_half(x[i]);else cache[j]=x[i];}}
 // FP32 resident transformer kernels. No quadratic attention workspace.
 extern "C" __global__ void binary(const float* a,const float* b,float* y,int n,int kind,float scale){
  int i=blockIdx.x*blockDim.x+threadIdx.x;if(i<n)y[i]=kind==0?a[i]+b[i]:kind==1?a[i]*b[i]:a[i]*scale;
@@ -18,17 +23,17 @@ extern "C" __global__ void norm_parameters(const float* g,const float* norm,floa
 extern "C" __global__ void rope(float* x,int h,int dim,int n,int offset,int inverse){int i=blockIdx.x*blockDim.x+threadIdx.x;if(i>=h*dim/2*n)return;int t=i%n,p=i/n,d=(p%(dim/2))*2,head=p/(dim/2);float angle=(offset+t)*powf(10000.f,-(float)d/dim)*(inverse?-1:1),s,c;sincosf(angle,&s,&c);int a=(head*dim+d)*n+t,b=a+n;float u=x[a],v=x[b];x[a]=u*c-v*s;x[b]=u*s+v*c;}
 // Each output element performs online softmax: O(1) workspace and stable max rescaling.
 // One cooperative block per query/head; online softmax and linear shared workspace.
-extern "C" __global__ void attention(const float* q,const float* k,const float* v,float* y,int heads,int kv,int dim,int n,int keys,int offset){
+extern "C" __global__ void attention(const float* q,const float* k,const float* v,float* y,int heads,int kv,int dim,int n,int keys,int offset,int half){
  int t=blockIdx.x%n,h=blockIdx.x/n,kh=h/(heads/kv),tid=threadIdx.x;
  extern __shared__ float memory[];float* reduction=memory;float* accum=memory+256;
  __shared__ float state[4];
  if(tid==0){state[0]=-3.402823466e+38F;state[1]=0;}
  for(int d=tid;d<dim;d+=256)accum[d]=0;__syncthreads();
  for(int s=0;s<=offset+t;s++){
-  float z=0;for(int d=tid;d<dim;d+=256)z+=q[(h*dim+d)*n+t]*k[(kh*dim+d)*keys+s];reduction[tid]=z;__syncthreads();
+  float z=0;for(int d=tid;d<dim;d+=256)z+=q[(h*dim+d)*n+t]*cache_read(k,(kh*dim+d)*keys+s,half);reduction[tid]=z;__syncthreads();
   for(int step=128;step>0;step/=2){if(tid<step)reduction[tid]+=reduction[tid+step];__syncthreads();}
   if(tid==0){z=reduction[0]*rsqrtf((float)dim);float next=fmaxf(state[0],z);state[2]=expf(state[0]-next);state[3]=expf(z-next);state[1]=state[1]*state[2]+state[3];state[0]=next;}__syncthreads();
-  for(int d=tid;d<dim;d+=256)accum[d]=accum[d]*state[2]+state[3]*v[(kh*dim+d)*keys+s];__syncthreads();
+  for(int d=tid;d<dim;d+=256)accum[d]=accum[d]*state[2]+state[3]*cache_read(v,(kh*dim+d)*keys+s,half);__syncthreads();
  }
  for(int d=tid;d<dim;d+=256)y[(h*dim+d)*n+t]=accum[d]/state[1];
 }
@@ -44,7 +49,7 @@ extern "C" __global__ void embedding_backward(const float* ids,const float* g,fl
 extern "C" __global__ void slice(const float* x,float* y,int rows,int cols,int offset,int width){int i=blockIdx.x*blockDim.x+threadIdx.x;if(i<rows*width)y[i]=x[(i/width)*cols+offset+i%width];}
 extern "C" __global__ void append(const float* x,float* y,int rows,int cols,int offset,int width,int add){int i=blockIdx.x*blockDim.x+threadIdx.x;if(i<rows*width){int j=(i/width)*cols+offset+i%width;if(add)y[j]+=x[i];else y[j]=x[i];}}
 extern "C" __global__ void xent(const float* logits,const float* labels,float* delta,float* losses,int classes,int n){int t=blockIdx.x*blockDim.x+threadIdx.x;if(t>=n)return;float max=-3.402823466e+38F,sum=0;for(int c=0;c<classes;c++)max=fmaxf(max,logits[c*n+t]);for(int c=0;c<classes;c++)sum+=expf(logits[c*n+t]-max);losses[t]=(logf(sum)+max-logits[(int)labels[t]*n+t])/n;for(int c=0;c<classes;c++)delta[c*n+t]=(expf(logits[c*n+t]-max)/sum-(c==(int)labels[t]))/n;}
-extern "C" __global__ void squared_sum(const float* x,float* y,int n){__shared__ float buf[256];int tid=threadIdx.x;float sum=0;for(int i=tid;i<n;i+=256)sum+=x[i]*x[i];buf[tid]=sum;__syncthreads();for(int d=128;d>0;d/=2){if(tid<d)buf[tid]+=buf[tid+d];__syncthreads();}if(tid==0)y[0]=buf[0];}
+extern "C" __global__ void squared_sum(const float* x,float* y,int n){__shared__ float buf[256];int tid=threadIdx.x;float sum=0;for(int i=blockIdx.x*256+tid;i<n;i+=gridDim.x*256)sum+=x[i]*x[i];buf[tid]=sum;__syncthreads();for(int d=128;d>0;d/=2){if(tid<d)buf[tid]+=buf[tid+d];__syncthreads();}if(tid==0)atomicAdd(y,buf[0]);}
 extern "C" __global__ void route(const float* logits,float* prob,float* score,float* weights,float* freq,int e,int n,int topk,int sigmoid){int t=blockIdx.x*blockDim.x+threadIdx.x;if(t>=n)return;float max=-3.402823466e+38F,sum=0;for(int j=0;j<e;j++)max=fmaxf(max,logits[j*n+t]);for(int j=0;j<e;j++)sum+=expf(logits[j*n+t]-max);for(int j=0;j<e;j++){prob[j*n+t]=expf(logits[j*n+t]-max)/sum;score[j*n+t]=sigmoid?1.f/(1.f+expf(-logits[j*n+t])):prob[j*n+t];weights[j*n+t]=0;}float denom=0;for(int k=0;k<topk;k++){int best=-1;for(int j=0;j<e;j++)if(weights[j*n+t]==0&&(best<0||score[j*n+t]>score[best*n+t]))best=j;weights[best*n+t]=-1;denom+=score[best*n+t];atomicAdd(&freq[best],1.f/(n*topk));}for(int j=0;j<e;j++)if(weights[j*n+t]<0)weights[j*n+t]=denom>0?score[j*n+t]/denom:1.f/topk;}
 extern "C" __global__ void dispatch(const float* weights,float* slots,float* counts,int e,int n,int cap){int j=blockIdx.x*blockDim.x+threadIdx.x;if(j>=e)return;int count=0;for(int t=0;t<n;t++)if(weights[j*n+t]>0&&count<cap)slots[j*cap+count++]=t;counts[j]=count;}
 extern "C" __global__ void gather(const float* x,const float* slots,float* batch,int h,int n,int cap,int expert,int count){int i=blockIdx.x*blockDim.x+threadIdx.x;if(i<h*count)batch[i]=x[(i/count)*n+(int)slots[expert*cap+i%count]];}
@@ -53,3 +58,4 @@ extern "C" __global__ void expert_delta(const float* g,const float* y,const floa
 extern "C" __global__ void scatter_gradient(const float* batch,const float* slots,float* dx,int h,int n,int cap,int expert,int count){int i=blockIdx.x*blockDim.x+threadIdx.x;if(i<h*count)dx[(i/count)*n+(int)slots[expert*cap+i%count]]+=batch[i];}
 extern "C" __global__ void route_backward(const float* dw,const float* weights,const float* prob,const float* score,const float* freq,float* dl,int e,int n,int sigmoid,float balance){int t=blockIdx.x*blockDim.x+threadIdx.x;if(t>=n)return;float dot=0,mean=0;for(int j=0;j<e;j++){dot+=weights[j*n+t]*dw[j*n+t];mean+=prob[j*n+t]*freq[j];}for(int j=0;j<e;j++)dl[j*n+t]=weights[j*n+t]*(dw[j*n+t]-dot)*(sigmoid?1-score[j*n+t]:1)+balance*e/n*prob[j*n+t]*(freq[j]-mean);}
 extern "C" __global__ void balance_loss(const float* prob,const float* freq,float* loss,int e,int n,float balance){int t=blockIdx.x*blockDim.x+threadIdx.x;if(t>=n)return;float sum=0;for(int j=0;j<e;j++)sum+=prob[j*n+t]*freq[j];loss[t]=balance*e/n*sum;}
+extern "C" __global__ void greedy(const float* logits,float* out,int vocab,int n,int token){__shared__ float best[256];__shared__ int ids[256];int tid=threadIdx.x,id=tid;float value=-3.402823466e+38F;for(int c=tid;c<vocab;c+=256)if(logits[c*n+token]>value){value=logits[c*n+token];id=c;}best[tid]=value;ids[tid]=id;__syncthreads();for(int step=128;step>0;step/=2){if(tid<step&&(best[tid+step]>best[tid]||(best[tid+step]==best[tid]&&ids[tid+step]<ids[tid]))){best[tid]=best[tid+step];ids[tid]=ids[tid+step];}__syncthreads();}if(tid==0)out[0]=ids[0];}

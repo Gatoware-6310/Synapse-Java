@@ -12,6 +12,8 @@ public final class MultiHeadAttentionLayer extends TrainableLayer {
     private final Matrix wq, wk, wv, wo;
     final int hidden, heads, kvHeads, dim, context;
     final boolean rope;
+    final boolean halfCache;
+    private xyz.gatoware.synapse.backend.CudaTransformerOps.KVCache deviceCache;
     private Matrix input, q, k, v, attended, output, cacheK, cacheV;
     private int offset, cacheLength;
     private boolean cachedForward;
@@ -23,6 +25,7 @@ public final class MultiHeadAttentionLayer extends TrainableLayer {
         kvHeads = c.kvHeads;
         dim = hidden / heads;
         context = c.contextLength;
+        halfCache = c.kvCachePrecision == KVCachePrecision.FP16;
         rope = c.positionEncoding == PositionEncoding.ROPE;
         wq = parameter(random(hidden, hidden));
         wk = parameter(random(kvHeads * dim, hidden));
@@ -31,6 +34,10 @@ public final class MultiHeadAttentionLayer extends TrainableLayer {
     }
 
     public void resetCache() {
+        if (deviceCache != null) {
+            deviceCache.close();
+            deviceCache = null;
+        }
         cacheLength = 0;
         cacheK = null;
         cacheV = null;
@@ -65,22 +72,26 @@ public final class MultiHeadAttentionLayer extends TrainableLayer {
             rotate(nk, kvHeads, offset, false);
         }
         if (cached && gpu() != null) {
-            int n = offset + x.columns();
-            if (cacheK == null) {
-                cacheK = gpu().zeros(kvHeads * dim, context);
-                cacheV = gpu().zeros(kvHeads * dim, context);
-            }
-            gpu().append(nk, cacheK, offset, false);
-            gpu().append(nv, cacheV, offset, false);
-            k = cacheK;
-            v = cacheV;
-            cacheLength = n;
+            if (deviceCache == null)
+                deviceCache = gpu().newKVCache(kvHeads * dim, context, halfCache);
+            deviceCache.append(nk, nv, offset);
+            cacheLength = offset + x.columns();
+            attended = gpu().attentionCached(q, deviceCache, heads, kvHeads, dim, offset);
+            return output = mm(wo, attended);
         } else if (cached) {
             int n = offset + x.columns();
             if (cacheK == null) {
                 cacheK = new Matrix(kvHeads * dim, context);
                 cacheV = new Matrix(kvHeads * dim, context);
             }
+            if (halfCache)
+                for (int i = 0; i < nk.rows(); i++)
+                    for (int t = 0; t < nk.columns(); t++) {
+                        nk.values[i][t] =
+                                Float.float16ToFloat(Float.floatToFloat16(nk.values[i][t]));
+                        nv.values[i][t] =
+                                Float.float16ToFloat(Float.floatToFloat16(nv.values[i][t]));
+                    }
             for (int i = 0; i < nk.rows(); i++) {
                 System.arraycopy(nk.values[i], 0, cacheK.values[i], offset, x.columns());
                 System.arraycopy(nv.values[i], 0, cacheV.values[i], offset, x.columns());

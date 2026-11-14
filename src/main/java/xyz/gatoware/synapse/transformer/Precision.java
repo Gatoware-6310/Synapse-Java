@@ -1,6 +1,7 @@
 package xyz.gatoware.synapse.transformer;
 
-/** Supported Precision choices. */
+/** FP16_COMPUTE uses Tensor Core GEMM with FP32 master storage and accumulation. */
 public enum Precision {
-    FP32
+    FP32,
+    FP16_COMPUTE
 }

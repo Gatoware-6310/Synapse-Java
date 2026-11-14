@@ -35,7 +35,13 @@ public final class CudaTransformerOps implements AutoCloseable {
             JCudaDriver.setExceptionsEnabled(true);
             JNvrtc.nvrtcCreateProgram(program, source, "transformer.cu", 0, null, null);
             created = true;
-            String[] options = {"--gpu-architecture=compute_52"};
+            int[] device = {0};
+            jcuda.runtime.JCuda.cudaGetDevice(device);
+            jcuda.runtime.cudaDeviceProp properties = new jcuda.runtime.cudaDeviceProp();
+            jcuda.runtime.JCuda.cudaGetDeviceProperties(properties, device[0]);
+            String[] options = {
+                "--gpu-architecture=compute_" + properties.major + properties.minor
+            };
             try {
                 JNvrtc.nvrtcCompileProgram(program, options.length, options);
             } catch (RuntimeException ex) {
@@ -263,7 +269,108 @@ public final class CudaTransformerOps implements AutoCloseable {
                         arg(dim),
                         arg(q.columns()),
                         arg(k.columns()),
-                        arg(offset)),
+                        arg(offset),
+                        arg(0)),
+                null);
+        return y;
+    }
+
+    private final java.util.Set<KVCache> kvCaches =
+            java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+
+    public final class KVCache implements AutoCloseable {
+        private final CudaBackend.DeviceBuffer keys, values;
+        private final int rows, context;
+        private final boolean half;
+        private boolean closed;
+
+        private KVCache(int rows, int context, boolean half) {
+            this.rows = rows;
+            this.context = context;
+            this.half = half;
+            int count = Math.multiplyExact(rows, context),
+                    units = half ? (int) (((long) count + 1) / 2) : count;
+            keys = cuda.temporary(units);
+            try {
+                values = cuda.temporary(units);
+            } catch (RuntimeException ex) {
+                cuda.releaseTemporary(keys);
+                throw ex;
+            }
+            kvCaches.add(this);
+        }
+
+        public void append(Matrix k, Matrix v, int offset) {
+            if (closed) throw new IllegalStateException("Closed KV cache");
+            launch(
+                    "cache_append",
+                    k.rows() * k.columns(),
+                    ptr(k),
+                    Pointer.to(keys.pointer),
+                    arg(rows),
+                    arg(k.columns()),
+                    arg(context),
+                    arg(offset),
+                    arg(half ? 1 : 0));
+            launch(
+                    "cache_append",
+                    v.rows() * v.columns(),
+                    ptr(v),
+                    Pointer.to(values.pointer),
+                    arg(rows),
+                    arg(v.columns()),
+                    arg(context),
+                    arg(offset),
+                    arg(half ? 1 : 0));
+        }
+
+        @Override
+        public void close() {
+            if (!closed) {
+                cuda.releaseTemporary(keys);
+                cuda.releaseTemporary(values);
+                closed = true;
+                kvCaches.remove(this);
+            }
+        }
+    }
+
+    public KVCache newKVCache(int rows, int context, boolean half) {
+        return new KVCache(rows, context, half);
+    }
+
+    public Matrix attentionCached(Matrix q, KVCache cache, int heads, int kv, int dim, int offset) {
+        Matrix y = allocate(q.rows(), q.columns());
+        CUfunction f =
+                functions.computeIfAbsent(
+                        "attention",
+                        name -> {
+                            CUfunction fn = new CUfunction();
+                            JCudaDriver.cuModuleGetFunction(fn, module, name);
+                            return fn;
+                        });
+        JCudaDriver.cuLaunchKernel(
+                f,
+                heads * q.columns(),
+                1,
+                1,
+                256,
+                1,
+                1,
+                (256 + dim) * 4,
+                null,
+                Pointer.to(
+                        ptr(q),
+                        Pointer.to(cache.keys.pointer),
+                        Pointer.to(cache.values.pointer),
+                        ptr(y),
+                        arg(heads),
+                        arg(kv),
+                        arg(dim),
+                        arg(q.columns()),
+                        arg(cache.context),
+                        arg(offset),
+                        arg(cache.half ? 1 : 0)),
                 null);
         return y;
     }
@@ -369,10 +476,46 @@ public final class CudaTransformerOps implements AutoCloseable {
     }
 
     public double squaredSum(Matrix g) {
-        Matrix out = allocate(1, 1);
-        launch("squared_sum", 256, ptr(g), ptr(out), arg(g.rows() * g.columns()));
+        Matrix out = zeros(1, 1);
+        launch(
+                "squared_sum",
+                Math.min(65536, g.rows() * g.columns()),
+                ptr(g),
+                ptr(out),
+                arg(g.rows() * g.columns()));
         cuda.materialize(out);
         return out.values[0][0];
+    }
+
+    public double squaredSums(java.util.List<Matrix> gradients) {
+        Matrix sums = zeros(1, gradients.size());
+        for (int i = 0; i < gradients.size(); i++) {
+            Matrix g = gradients.get(i);
+            launch(
+                    "squared_sum",
+                    Math.min(65536, g.rows() * g.columns()),
+                    ptr(g),
+                    Pointer.to(cuda.device(sums).pointer.withByteOffset((long) i * 4)),
+                    arg(g.rows() * g.columns()));
+        }
+        cuda.materialize(sums);
+        double sum = 0;
+        for (float value : sums.values[0]) sum += value;
+        return sum;
+    }
+
+    public int greedy(Matrix logits, int token) {
+        Matrix output = allocate(1, 1);
+        launch(
+                "greedy",
+                256,
+                ptr(logits),
+                ptr(output),
+                arg(logits.rows()),
+                arg(logits.columns()),
+                arg(token));
+        cuda.materialize(output);
+        return (int) output.values[0][0];
     }
 
     public void zero(Matrix g) {
@@ -529,6 +672,7 @@ public final class CudaTransformerOps implements AutoCloseable {
 
     @Override
     public void close() {
+        for (KVCache cache : new java.util.ArrayList<>(kvCaches)) cache.close();
         JCudaDriver.cuModuleUnload(module);
     }
 }

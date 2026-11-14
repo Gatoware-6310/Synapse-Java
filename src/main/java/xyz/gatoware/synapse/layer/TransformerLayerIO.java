@@ -10,7 +10,7 @@ public final class TransformerLayerIO {
     private TransformerLayerIO() {}
 
     public static void write(DataOutput out, TrainableLayer layer) throws IOException {
-        out.writeInt(1);
+        out.writeInt(2);
         if (layer instanceof Transformer t) {
             out.writeByte(8);
             TransformerIO.writeConfig(out, t.getConfig());
@@ -35,6 +35,8 @@ public final class TransformerLayerIO {
                     new TransformerConfig(2, a.hidden, 1, a.heads)
                             .setKVHeads(a.kvHeads)
                             .setContextLength(a.context)
+                            .setKVCachePrecision(
+                                    a.halfCache ? KVCachePrecision.FP16 : KVCachePrecision.FP32)
                             .setPositionEncoding(
                                     a.rope ? PositionEncoding.ROPE : PositionEncoding.LEARNED));
         } else if (layer instanceof MoELayer m) {
@@ -52,7 +54,9 @@ public final class TransformerLayerIO {
     }
 
     public static TrainableLayer read(DataInput in) throws IOException {
-        if (in.readInt() != 1) throw new IOException("Unsupported transformer layer version");
+        int version = in.readInt();
+        if (version != 1 && version != 2)
+            throw new IOException("Unsupported transformer layer version");
         try {
             TrainableLayer layer =
                     switch (in.readUnsignedByte()) {
@@ -63,17 +67,18 @@ public final class TransformerLayerIO {
                                         in.readInt(),
                                         in.readInt(),
                                         Activations.valueOf(in.readUTF()));
-                        case 4 -> new MultiHeadAttentionLayer(TransformerIO.readConfig(in));
+                        case 4 ->
+                                new MultiHeadAttentionLayer(TransformerIO.readConfig(in, version));
                         case 5 ->
                                 new MoELayer(
                                         in.readInt(),
                                         in.readInt(),
                                         Activations.valueOf(in.readUTF()),
-                                        TransformerIO.readMoE(in));
+                                        TransformerIO.readMoE(in, version));
                         case 6 ->
                                 new TransformerDecoderLayer(
-                                        TransformerIO.readConfig(in), in.readInt());
-                        case 8 -> new Transformer(TransformerIO.readConfig(in));
+                                        TransformerIO.readConfig(in, version), in.readInt());
+                        case 8 -> new Transformer(TransformerIO.readConfig(in, version));
                         default -> throw new IOException("Unknown transformer layer type");
                     };
             TransformerIO.readParameters(in, layer);

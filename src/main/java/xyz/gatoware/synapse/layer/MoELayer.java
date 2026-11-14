@@ -24,6 +24,7 @@ public final class MoELayer extends TrainableLayer {
     private xyz.gatoware.synapse.backend.CudaTransformerOps.Routing routing;
 
     public MoELayer(int hidden, int intermediate, Activations activation, MoEConfig config) {
+        config.validate();
         this.config = config.copy();
         router = parameter(random(config.experts, hidden));
         experts = new FeedForwardLayer[config.experts];
@@ -120,7 +121,9 @@ public final class MoELayer extends TrainableLayer {
                 auxiliaryLoss +=
                         config.loadBalancing * e * frequency[j] * probability.values[j][t] / n;
         int capacity =
-                Float.isInfinite(config.capacityFactor)
+                (!training
+                                || config.overflowPolicy == OverflowPolicy.ROUTE_ALL
+                                || Float.isInfinite(config.capacityFactor))
                         ? n * k
                         : Math.max(1, (int) Math.ceil(config.capacityFactor * n * k / e));
         dispatch = new int[e][];
@@ -190,6 +193,7 @@ public final class MoELayer extends TrainableLayer {
             for (int j = 0; j < e; j++)
                 dl.values[j][t] +=
                         config.loadBalancing
+                                * auxiliaryGradientScale
                                 * e
                                 / n
                                 * probability.values[j][t]
@@ -204,7 +208,9 @@ public final class MoELayer extends TrainableLayer {
     private Matrix forwardGpu(Matrix x) {
         int n = x.columns();
         int capacity =
-                Float.isInfinite(config.capacityFactor)
+                (!training
+                                || config.overflowPolicy == OverflowPolicy.ROUTE_ALL
+                                || Float.isInfinite(config.capacityFactor))
                         ? n
                         : Math.min(
                                 n,
@@ -248,7 +254,7 @@ public final class MoELayer extends TrainableLayer {
                                 dw,
                                 routing,
                                 config.router == RouterType.TOP_K_SIGMOID,
-                                config.loadBalancing);
+                                config.loadBalancing * auxiliaryGradientScale);
         accumulate(gradients.get(0), mm(dl, transpose(input)));
         dx = add(dx, mm(transpose(router), dl));
         for (var s : shared) dx = add(dx, s.backwardGradient(g));

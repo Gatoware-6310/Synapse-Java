@@ -25,6 +25,7 @@ public final class Transformer extends TrainableLayer {
     private Matrix[] checkpointInputs;
     private int positionOffset;
     private boolean cachedForward;
+    private boolean trainingMode;
     private float lastLoss = Float.NaN;
 
     public Transformer(TransformerConfig requested) {
@@ -59,8 +60,20 @@ public final class Transformer extends TrainableLayer {
         children.add(finalNorm);
     }
 
+    @Override
+    public void setTraining(boolean value) {
+        trainingMode = value;
+        super.setTraining(value);
+    }
+
     public TransformerConfig getConfig() {
         return config.copy();
+    }
+
+    public float auxiliaryLoss() {
+        float total = 0;
+        for (var b : blocks) total += b.auxiliaryLoss();
+        return total;
     }
 
     public float getLastLoss() {
@@ -110,7 +123,7 @@ public final class Transformer extends TrainableLayer {
                         * config.contextLength
                         * config.kvHeads
                         * (config.hiddenSize / config.heads)
-                        * 8;
+                        * (Synapse.getDevice()==Devices.CUDA && config.kvCachePrecision == KVCachePrecision.FP16 ? 4 : 8);
         return n;
     }
 
@@ -145,6 +158,16 @@ public final class Transformer extends TrainableLayer {
     }
 
     private Matrix run(Matrix tokens, boolean cached) {
+        Precision old = setPrecision(config.precision);
+        try {
+            return runInternal(tokens, cached);
+        } finally {
+            setPrecision(old);
+        }
+    }
+
+    private Matrix runInternal(Matrix tokens, boolean cached) {
+        for (var block : blocks) block.setTraining(trainingMode && !cached);
         int start = cached ? positionOffset : 0;
         if (tokens.columns() < 1 || (long) start + tokens.columns() > config.contextLength)
             throw new IllegalArgumentException("Sequence exceeds configured context length");
@@ -174,6 +197,15 @@ public final class Transformer extends TrainableLayer {
 
     @Override
     public Matrix backwardGradient(Matrix g) {
+        Precision old = setPrecision(config.precision);
+        try {
+            return backwardInternal(g);
+        } finally {
+            setPrecision(old);
+        }
+    }
+
+    private Matrix backwardInternal(Matrix g) {
         shape(g, logits);
         if (cachedForward)
             throw new IllegalStateException("Training requires an uncached forward pass");
@@ -200,6 +232,16 @@ public final class Transformer extends TrainableLayer {
 
     /** Mean shifted next-token cross entropy plus MoE auxiliary losses. */
     public float loss(int[] sequence) {
+        boolean old = trainingMode;
+        trainingMode = true;
+        try {
+            return trainingLoss(sequence);
+        } finally {
+            trainingMode = old;
+        }
+    }
+
+    private float trainingLoss(int[] sequence) {
         validateSequence(sequence);
         int[] x = Arrays.copyOf(sequence, sequence.length - 1);
         forward(x);
@@ -258,6 +300,22 @@ public final class Transformer extends TrainableLayer {
             Optimizer optimizer,
             int accumulationSteps,
             float clipNorm) {
+        boolean old = trainingMode;
+        trainingMode = true;
+        try {
+            fitInternal(sequences, epochs, rate, optimizer, accumulationSteps, clipNorm);
+        } finally {
+            trainingMode = old;
+        }
+    }
+
+    private void fitInternal(
+            int[][] sequences,
+            int epochs,
+            float rate,
+            Optimizer optimizer,
+            int accumulationSteps,
+            float clipNorm) {
         if (sequences == null
                 || sequences.length == 0
                 || epochs < 1
@@ -272,23 +330,40 @@ public final class Transformer extends TrainableLayer {
             double sum = 0;
             for (int start = 0; start < sequences.length; start += accumulationSteps) {
                 zeroGrad();
+                float lossScaling =
+                        config.precision == Precision.FP16_COMPUTE && gpu() != null
+                                ? config.lossScale
+                                : 1f;
                 int count = Math.min(accumulationSteps, sequences.length - start);
                 for (int b = 0; b < count; b++) {
                     int[] s = sequences[start + b];
                     forward(Arrays.copyOf(s, s.length - 1));
                     Matrix delta = new Matrix(config.vocabularySize, s.length - 1);
                     sum += crossEntropy(s, delta);
-                    backwardGradient(delta);
+                    delta = scale(delta, lossScaling);
+                    setAuxiliaryGradientScale(lossScaling);
+                    try {
+                        backwardGradient(delta);
+                    } finally {
+                        setAuxiliaryGradientScale(1f);
+                    }
                 }
                 List<Matrix> gs = gradients();
-                double squared = 0;
+                double squared =
+                        gpu() != null
+                                ? gpu().squaredSums(gs)
+                                        / ((double) count * count * lossScaling * lossScaling)
+                                : 0;
                 for (Matrix g : gs) {
-                    if (gpu() != null) squared += gpu().squaredSum(g) / (count * count);
-                    else
+                    if (gpu() == null)
                         for (float[] row : g.values)
                             for (float v : row) squared += (double) (v / count) * (v / count);
                 }
-                float scale = 1f / count;
+                if (!Double.isFinite(squared))
+                    throw new IllegalStateException(
+                            "Nonfinite gradients; no update applied. Reduce lossScale/learning rate"
+                                    + " or select FP32.");
+                float scale = 1f / (count * lossScaling);
                 if (clipNorm > 0 && Math.sqrt(squared) > clipNorm)
                     scale *= clipNorm / Math.sqrt(squared);
                 for (Matrix g : gs) {
@@ -317,6 +392,7 @@ public final class Transformer extends TrainableLayer {
                 || c.topP > 1
                 || c.eosToken >= config.vocabularySize)
             throw new IllegalArgumentException("Invalid generation configuration/context");
+        boolean wasTraining=trainingMode;trainingMode=false;
         int[] out = Arrays.copyOf(prompt, prompt.length + c.maxNewTokens);
         Random random = new Random(c.seed);
         resetCache();
@@ -333,15 +409,27 @@ public final class Transformer extends TrainableLayer {
             }
             return out;
         } finally {
-            resetCache();
+            trainingMode=wasTraining;resetCache();
         }
     }
 
     private int sample(Matrix y, int t, GenerationConfig c, Random rng) {
+        if (gpu() != null) {
+            if (c.temperature == 0) return gpu().greedy(y, t);
+            y = gpu().slice(y, t, 1);
+            t = 0;
+        }
         host(y);
+        final Matrix sampledLogits = y;
+        final int sampledColumn = t;
         Integer[] ids = new Integer[y.rows()];
         for (int i = 0; i < ids.length; i++) ids[i] = i;
-        Arrays.sort(ids, (a, b) -> Float.compare(y.values[b][t], y.values[a][t]));
+        Arrays.sort(
+                ids,
+                (a, b) ->
+                        Float.compare(
+                                sampledLogits.values[b][sampledColumn],
+                                sampledLogits.values[a][sampledColumn]));
         if (c.temperature == 0) return ids[0];
         int k = c.topK == 0 ? ids.length : Math.min(c.topK, ids.length);
         double[] p = new double[k];
@@ -378,7 +466,7 @@ public final class Transformer extends TrainableLayer {
         try (DataOutputStream out =
                 new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(path)))) {
             out.writeInt(0x534e5431);
-            out.writeInt(1);
+            out.writeInt(2);
             TransformerIO.writeConfig(out, config);
             TransformerIO.writeParameters(out, this);
         }
@@ -391,9 +479,12 @@ public final class Transformer extends TrainableLayer {
     public static Transformer load(Path path) throws IOException {
         try (DataInputStream in =
                 new DataInputStream(new BufferedInputStream(Files.newInputStream(path)))) {
-            if (in.readInt() != 0x534e5431 || in.readInt() != 1)
+            if (in.readInt() != 0x534e5431)
                 throw new IOException("Unsupported transformer .snn format");
-            Transformer m = new Transformer(TransformerIO.readConfig(in));
+            int version = in.readInt();
+            if (version != 1 && version != 2)
+                throw new IOException("Unsupported transformer .snn version");
+            Transformer m = new Transformer(TransformerIO.readConfig(in, version));
             TransformerIO.readParameters(in, m);
             if (in.read() != -1) throw new IOException("Trailing checkpoint data");
             return m;

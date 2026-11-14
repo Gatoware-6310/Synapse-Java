@@ -18,17 +18,29 @@ class TransformerLayerTest {
         Matrix y = l.forward(x);
         double s = 0;
         for (int i = 0; i < y.rows(); i++)
-            for (int j = 0; j < y.columns(); j++) s += y.values[i][j] * g.values[i][j];
-        return s + (l instanceof MoELayer m ? m.auxiliaryLoss() : 0);
+            for (int j = 0; j < y.columns(); j++) s += (double) y.values[i][j] * g.values[i][j];
+        return s
+                + (l instanceof MoELayer m
+                        ? m.auxiliaryLoss()
+                        : l instanceof xyz.gatoware.synapse.Transformer m
+                                ? m.auxiliaryLoss()
+                                : l instanceof TransformerDecoderLayer d ? d.auxiliaryLoss() : 0);
     }
 
     static void check(TrainableLayer l, Matrix x) {
+        // Fixed fixtures keep numerical checks away from random top-k routing boundaries.
+        java.util.Random random = new java.util.Random(1234);
+        for (Matrix parameter : l.parameters()) {
+            for (float[] row : parameter.values)
+                for (int j = 0; j < row.length; j++) row[j] = (random.nextFloat() - .5f) * .8f;
+            parameter.markDirty();
+        }
         Matrix y = l.forward(x), g = input(y.rows(), y.columns());
         l.zeroGrad();
         Matrix dx = l.backwardGradient(g);
         var ps = l.parameters();
         var gs = l.gradients();
-        float eps = .002f;
+        float eps = .0005f;
         for (int p = 0; p < ps.size(); p++) {
             Matrix m = ps.get(p), d = gs.get(p).copy();
             for (int i = 0; i < m.rows(); i++)
@@ -45,7 +57,7 @@ class TransformerLayerTest {
                     assertEquals(
                             (a - b) / (2 * eps),
                             d.values[i][j],
-                            .004,
+                            .001 * (1 + Math.abs(d.values[i][j])),
                             "parameter " + p + " [" + i + "," + j + "]");
                 }
         }
@@ -61,7 +73,11 @@ class TransformerLayerTest {
                     double b = objective(l, x, g);
                     x.values[i][j] = old;
                     x.markDirty();
-                    assertEquals((a - b) / (2 * eps), dx.values[i][j], .004, "input gradient");
+                    assertEquals(
+                            (a - b) / (2 * eps),
+                            dx.values[i][j],
+                            .001 * (1 + Math.abs(dx.values[i][j])),
+                            "input gradient");
                 }
     }
 
@@ -124,6 +140,19 @@ class TransformerLayerTest {
                                         .setNormalization(norm)
                                         .setPreNormalization(pre)),
                         input(4, 3));
+    }
+
+    @Test
+    void overflowGradientsAndSelection() {
+        MoELayer layer =
+                new MoELayer(
+                        3,
+                        4,
+                        Activations.GELU,
+                        new MoEConfig(3, 2).setCapacityFactor(.3f).setLoadBalancing(.1f));
+        check(layer, input(3, 4));
+        layer.forward(input(3, 4));
+        for (int[] chosen : layer.selectedExperts()) assertNotEquals(chosen[0], chosen[1]);
     }
 
     @Test

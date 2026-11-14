@@ -122,3 +122,23 @@ tasks.register('cudaBenchmark', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'CudaBenchmark'
 }
+
+// These hardware checks are explicit commands and fail clearly when CUDA is unavailable.
+tasks.register('cudaTransformerCheck', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'CudaTransformerCheck'
+}
+
+tasks.register('transformerBenchmark', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'TransformerBenchmark'
+    maxHeapSize = '4g'
+}
+
+tasks.register('transformerExamples', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'TransformerExamples'
+}

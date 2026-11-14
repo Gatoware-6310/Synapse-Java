@@ -164,6 +164,33 @@ class TransformerTest {
     }
 
     @Test
+    void halfCacheMatchesFull() {
+        Transformer m = new Transformer(tiny().setKVCachePrecision(KVCachePrecision.FP16));
+        int[] tokens = {0, 1, 2, 3};
+        Matrix full = m.forward(tokens);
+        m.resetCache();
+        for (int t = 0; t < tokens.length; t++) {
+            Matrix cached = m.forwardCached(new int[] {tokens[t]});
+            for (int j = 0; j < full.rows(); j++)
+                assertEquals(full.values[j][t], cached.values[j][0], .003);
+        }
+        m.resetCache();
+    }
+
+    @Test
+    void modelMoEGradient() {
+        Transformer m =
+                new Transformer(
+                        new TransformerConfig(3, 4, 1, 2)
+                                .setFFNSize(4)
+                                .setMoE(
+                                        new MoEConfig(3, 2)
+                                                .setSharedExperts(1)
+                                                .setLoadBalancing(.05f)));
+        TransformerLayerTest.check(m, new Matrix(new float[][] {{0, 1, 2}}));
+    }
+
+    @Test
     void accumulationMatchesAverage() {
         Transformer a = new Transformer(tiny()), b = new Transformer(tiny());
         var ap = a.parameters();

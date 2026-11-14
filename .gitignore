@@ -17,3 +17,7 @@ bin/
 *.swp
 *.swo
 *~
+
+# Python benchmark tooling
+__pycache__/
+*.pyc

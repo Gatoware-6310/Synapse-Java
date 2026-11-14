@@ -9,6 +9,9 @@ public final class TransformerConfig {
     public Normalization normalization = Normalization.RMS_NORM;
     public Activations activation = Activations.GELU;
     public MoEConfig moe;
+    public Precision precision = Precision.FP32;
+    public float lossScale = 128f;
+    public KVCachePrecision kvCachePrecision = KVCachePrecision.FP32;
 
     public TransformerConfig(int vocabularySize, int hiddenSize, int layerCount, int heads) {
         if (vocabularySize < 2
@@ -80,7 +83,18 @@ public final class TransformerConfig {
     }
 
     public TransformerConfig setPrecision(Precision n) {
-        java.util.Objects.requireNonNull(n);
+        precision = java.util.Objects.requireNonNull(n);
+        return this;
+    }
+
+    public TransformerConfig setKVCachePrecision(KVCachePrecision p) {
+        kvCachePrecision = java.util.Objects.requireNonNull(p);
+        return this;
+    }
+
+    public TransformerConfig setLossScale(float n) {
+        if (!Float.isFinite(n) || n < 1) throw new IllegalArgumentException();
+        lossScale = n;
         return this;
     }
 
@@ -95,11 +109,34 @@ public final class TransformerConfig {
         c.preNormalization = preNormalization;
         c.tieEmbeddings = tieEmbeddings;
         c.activationCheckpointing = activationCheckpointing;
+        c.kvCachePrecision = kvCachePrecision;
+        c.precision = precision;
+        c.lossScale = lossScale;
         c.moe = moe == null ? null : moe.copy();
         return c;
     }
 
     public void validate() {
+        if (contextLength < 1
+                || kvHeads < 1
+                || heads % kvHeads != 0
+                || ffnSize < 1
+                || positionEncoding == null
+                || normalization == null
+                || activation == null
+                || precision == null
+                || kvCachePrecision == null
+                || !Float.isFinite(lossScale)
+                || lossScale < 1)
+            throw new IllegalArgumentException("Invalid transformer configuration");
+        if ((long) hiddenSize * vocabularySize > Integer.MAX_VALUE
+                || (long) hiddenSize * ffnSize > Integer.MAX_VALUE
+                || (long) hiddenSize * contextLength > Integer.MAX_VALUE)
+            throw new IllegalArgumentException("Matrix exceeds Java/CUDA indexing limit");
+        if (hiddenSize / heads > 4096)
+            throw new IllegalArgumentException(
+                    "Head dimension exceeds kernel shared-memory limit (4096)");
+        if (moe != null) moe.validate();
         if (positionEncoding == PositionEncoding.ROPE && (hiddenSize / heads) % 2 != 0)
             throw new IllegalArgumentException("RoPE requires an even head dimension");
     }

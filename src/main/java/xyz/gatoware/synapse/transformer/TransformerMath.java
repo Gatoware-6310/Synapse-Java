@@ -9,6 +9,19 @@ import xyz.gatoware.synapse.matrix.Matrix;
 public final class TransformerMath {
     private TransformerMath() {}
 
+    private static final ThreadLocal<Precision> PRECISION =
+            ThreadLocal.withInitial(() -> Precision.FP32);
+
+    public static Precision precision() {
+        return PRECISION.get();
+    }
+
+    public static Precision setPrecision(Precision p) {
+        Precision old = PRECISION.get();
+        PRECISION.set(p);
+        return old;
+    }
+
     public static CudaTransformerOps gpu() {
         return Synapse.backend() instanceof CudaBackend c ? c.transformerOps() : null;
     }

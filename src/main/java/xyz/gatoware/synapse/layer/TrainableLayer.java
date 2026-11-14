@@ -8,6 +8,20 @@ import java.util.*;
 
 /** Shared parameter/gradient lifecycle for composable transformer layers. Gradients are sums. */
 public abstract class TrainableLayer implements Layer {
+    protected boolean training = true;
+
+    public void setTraining(boolean value) {
+        training = value;
+        for (var c : children) c.setTraining(value);
+    }
+
+    protected float auxiliaryGradientScale = 1f;
+
+    public void setAuxiliaryGradientScale(float scale) {
+        auxiliaryGradientScale = scale;
+        for (var c : children) c.setAuxiliaryGradientScale(scale);
+    }
+
     protected final List<Matrix> parameters = new ArrayList<>(), gradients = new ArrayList<>();
     protected final List<TrainableLayer> children = new ArrayList<>();
 
@@ -58,7 +72,14 @@ public abstract class TrainableLayer implements Layer {
             TransformerMath.host(x);
             saved.add(x.copy());
         }
-        Matrix result = backwardGradient(g);
+        float savedAuxiliaryScale = auxiliaryGradientScale;
+        setAuxiliaryGradientScale(0);
+        Matrix result;
+        try {
+            result = backwardGradient(g);
+        } finally {
+            setAuxiliaryGradientScale(savedAuxiliaryScale);
+        }
         for (int i = 0; i < gs.size(); i++) {
             Matrix a = gs.get(i), b = saved.get(i);
             for (int r = 0; r < a.rows(); r++)
@@ -79,11 +100,28 @@ public abstract class TrainableLayer implements Layer {
             throw new IllegalArgumentException("Invalid optimizer/rate");
         zeroGrad();
         Matrix result = backwardGradient(g);
+        for (Matrix d : gradients()) {
+            if (TransformerMath.gpu() != null) {
+                Matrix scaled = TransformerMath.scale(d, 1f / g.columns());
+                TransformerMath.gpu().zero(d);
+                TransformerMath.accumulate(d, scaled);
+            } else d.multiply(1f / g.columns());
+        }
         step(optimizer, rate);
         return result;
     }
 
     public void step(Optimizer optimizer, float rate) {
+        if (optimizer == null || !Float.isFinite(rate) || rate <= 0)
+            throw new IllegalArgumentException("Invalid optimizer/rate");
+        if (TransformerMath.gpu() != null
+                && !(optimizer instanceof Adam
+                        || optimizer instanceof AdamW
+                        || optimizer instanceof SGD
+                        || optimizer instanceof Momentum
+                        || optimizer instanceof RMSProp
+                        || optimizer instanceof AdaGrad))
+            throw new IllegalArgumentException("Custom optimizer requires explicit CPU selection");
         List<Matrix> ps = parameters(), gs = gradients();
         for (int i = 0; i < ps.size(); i++) {
             if (TransformerMath.gpu() != null
