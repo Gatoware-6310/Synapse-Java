@@ -149,6 +149,10 @@ public final class CudaBackend implements Backend {
 	private boolean kernelsAvailable;
 	private int pooledBuffers;
 	private boolean closed;
+    private CudaTransformerOps transformerOps;
+    /** Lazily compiled resident transformer kernels. */
+    public synchronized CudaTransformerOps transformerOps(){ensureOpen();if(transformerOps==null)transformerOps=new CudaTransformerOps(this);return transformerOps;}
+    synchronized Matrix transformerMultiply(Matrix a,Matrix b){return resident(multiplyDevice(device(a),device(b),a.rows(),a.columns(),b.columns()),a.rows(),b.columns());}
 
 	static final class DeviceBuffer {
 		final Pointer pointer;
@@ -751,6 +755,7 @@ public final class CudaBackend implements Backend {
 
 	@Override
 	public synchronized void close() {
+        if(transformerOps!=null){transformerOps.close();transformerOps=null;}
 		if (closed) return;
 		for (Map.Entry<float[][], DeviceBuffer> entry : cache.entrySet()) {
 			DeviceBuffer buffer = entry.getValue();

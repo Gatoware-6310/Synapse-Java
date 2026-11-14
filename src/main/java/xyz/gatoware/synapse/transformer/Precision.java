@@ -1,4 +1,6 @@
 package xyz.gatoware.synapse.transformer;
 
 /** Supported Precision choices. */
-public enum Precision { FP32 }
+public enum Precision {
+    FP32
+}

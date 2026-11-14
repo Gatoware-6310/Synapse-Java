@@ -28,6 +28,8 @@ import xyz.gatoware.synapse.layer.AvgPool2DLayer;
 import xyz.gatoware.synapse.layer.Conv2DLayer;
 import xyz.gatoware.synapse.layer.DenseLayer;
 import xyz.gatoware.synapse.layer.Layer;
+import xyz.gatoware.synapse.layer.TrainableLayer;
+import xyz.gatoware.synapse.layer.TransformerLayerIO;
 import xyz.gatoware.synapse.layer.MaxPool2DLayer;
 import xyz.gatoware.synapse.layer.Padding;
 import xyz.gatoware.synapse.loss.LossFunction;
@@ -40,7 +42,7 @@ import xyz.gatoware.synapse.optimizer.Optimizer;
 public class NeuralNetwork {
 	private static final int FILE_MAGIC = 0x534E4E31; // SNN1
 	private static final int LEGACY_FILE_VERSION = 1;
-	private static final int FILE_VERSION = 2;
+	private static final int FILE_VERSION = 3;
 	private static final int MAX_LAYERS = 1_000_000;
 	private static final int MAX_MATRIX_DIMENSION = 1_000_000;
 	private static final int LAYER_DENSE = 1;
@@ -727,7 +729,7 @@ public class NeuralNetwork {
 			if (input.readInt() != FILE_MAGIC)
 				throw new IOException("Not a Synapse neural network file");
 			int version = input.readInt();
-			if (version != LEGACY_FILE_VERSION && version != FILE_VERSION)
+			if (version != LEGACY_FILE_VERSION && version != 2 && version != FILE_VERSION)
 				throw new IOException("Unsupported Synapse neural network file version");
 
 			int layerCount = input.readInt();
@@ -746,6 +748,7 @@ public class NeuralNetwork {
 	}
 
 	private static void writeLayer(DataOutputStream output, Layer layer) throws IOException {
+        if(layer instanceof TrainableLayer t){output.writeByte(5);TransformerLayerIO.write(output,t);return;}
 		if (layer instanceof DenseLayer dense) {
 			output.writeByte(LAYER_DENSE);
 			writeMatrix(output, dense.getWeights());
@@ -782,6 +785,7 @@ public class NeuralNetwork {
 
 	private static Layer readLayer(DataInputStream input) throws IOException {
 		switch (input.readUnsignedByte()) {
+            case 5: return TransformerLayerIO.read(input);
 			case LAYER_DENSE:
 				return readLegacyDenseLayer(input);
 			case LAYER_CONV2D:
