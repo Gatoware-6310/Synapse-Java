@@ -27,7 +27,41 @@ import xyz.gatoware.synapse.optimizer.SGD;
 
 /** Experimental CUDA backend backed by JCuda and cuBLAS. */
 public final class CudaBackend implements Backend {
-	private static final int MAX_CACHED_MATRICES = 128;
+	private int matrixCacheLimit = 128;
+	private long cacheEvictions;
+	private long allocatedBytes, peakAllocatedBytes;
+
+	public synchronized long getPeakAllocatedBytes() {
+		return peakAllocatedBytes;
+	}
+
+	public synchronized String transformerDeviceInfo() {
+		int[] id = {0}, runtime = {0}, blas = {0};
+		JCuda.cudaGetDevice(id);
+		jcuda.runtime.cudaDeviceProp prop = new jcuda.runtime.cudaDeviceProp();
+		JCuda.cudaGetDeviceProperties(prop, id[0]);
+		JCuda.cudaRuntimeGetVersion(runtime);
+		JCublas2.cublasGetVersion(handle, blas);
+		return new String(prop.name).trim()
+				+ " cc="
+				+ prop.major
+				+ "."
+				+ prop.minor
+				+ " runtime="
+				+ runtime[0]
+				+ " cuBLAS="
+				+ blas[0];
+	}
+
+	/** Bounded resident cache. Evictions are reported and dirty entries are materialized. */
+	public synchronized void setMatrixCacheLimit(int n) {
+		if (n < 16) throw new IllegalArgumentException("Cache limit must be >=16");
+		matrixCacheLimit = n;
+	}
+
+	public synchronized long getCacheEvictions() {
+		return cacheEvictions;
+	}
 	private static final int MAX_POOL_BUFFERS = 64;
 	private static final int MAX_POOL_PER_SIZE = 16;
 	private static final int KERNEL_BLOCK_SIZE = 256;
@@ -149,6 +183,66 @@ public final class CudaBackend implements Backend {
 	private boolean kernelsAvailable;
 	private int pooledBuffers;
 	private boolean closed;
+	private CudaTransformerOps transformerOps;
+	private int transformerMajor = -1;
+
+	/** Lazily compiled resident transformer kernels. */
+	public synchronized CudaTransformerOps transformerOps() {
+		ensureOpen();
+		if (transformerOps == null) transformerOps = new CudaTransformerOps(this);
+		return transformerOps;
+	}
+
+	synchronized Matrix transformerMultiply(Matrix a, Matrix b) {
+		if (xyz.gatoware.synapse.transformer.TransformerMath.precision()
+				== xyz.gatoware.synapse.transformer.Precision.FP32)
+			return resident(
+					multiplyDevice(device(a), device(b), a.rows(), a.columns(), b.columns()),
+					a.rows(),
+					b.columns());
+		if (transformerMajor < 0) {
+			int[] deviceId = {0};
+			JCuda.cudaGetDevice(deviceId);
+			jcuda.runtime.cudaDeviceProp prop = new jcuda.runtime.cudaDeviceProp();
+			JCuda.cudaGetDeviceProperties(prop, deviceId[0]);
+			transformerMajor = prop.major;
+		}
+		if (transformerMajor < 8)
+			throw new IllegalStateException(
+					"FP16_COMPUTE requires an Ampere-or-newer CUDA GPU; select FP32");
+		DeviceBuffer left = device(a),
+				right = device(b),
+				result = acquire(Math.multiplyExact(a.rows(), b.columns()));
+		boolean owned = true;
+		try {
+			JCublas2.cublasGemmEx(
+					handle,
+					cublasOperation.CUBLAS_OP_N,
+					cublasOperation.CUBLAS_OP_N,
+					b.columns(),
+					a.rows(),
+					a.columns(),
+					alpha,
+					right.pointer,
+					jcuda.cudaDataType.CUDA_R_32F,
+					b.columns(),
+					left.pointer,
+					jcuda.cudaDataType.CUDA_R_32F,
+					a.columns(),
+					beta,
+					result.pointer,
+					jcuda.cudaDataType.CUDA_R_32F,
+					b.columns(),
+					jcuda.jcublas.cublasComputeType.CUBLAS_COMPUTE_32F_FAST_16F,
+					jcuda.jcublas.cublasGemmAlgo.CUBLAS_GEMM_DEFAULT);
+			Matrix y = resident(result, a.rows(), b.columns());
+			owned = false;
+			return y;
+		} finally {
+			if (owned) release(result);
+		}
+	}
+
 
 	static final class DeviceBuffer {
 		final Pointer pointer;
@@ -266,6 +360,7 @@ public final class CudaBackend implements Backend {
 	}
 
 	void updateResident(Matrix parameters, DeviceBuffer gradients, Optimizer optimizer, float learningRate) {
+		if(!ensureKernels())throw new IllegalStateException("CUDA optimizer kernels are unavailable; check NVRTC installation");
 		DeviceBuffer parameterBuffer = getOrUpload(parameters.values, parameters.rows(), parameters.columns());
 		updateOptimizer(parameters.values, parameterBuffer, gradients, optimizer, learningRate);
 	}
@@ -676,7 +771,24 @@ public final class CudaBackend implements Backend {
 			}
 		}
 		Pointer pointer = new Pointer();
-		JCuda.cudaMalloc(pointer, (long) elements * Sizeof.FLOAT);
+		try {
+			JCuda.cudaMalloc(pointer, (long) elements * Sizeof.FLOAT);
+		} catch (RuntimeException ex) {
+			long[] free = {0}, total = {0};
+			JCuda.cudaMemGetInfo(free, total);
+			throw new IllegalStateException(
+					"CUDA allocation failed: requested="
+							+ ((long) elements * Sizeof.FLOAT)
+							+ " bytes, free="
+							+ free[0]
+							+ ", total="
+							+ total[0]
+							+ ". Reduce model, context/batch size, or enable activation"
+							+ " checkpointing.",
+					ex);
+		}
+		allocatedBytes += (long) elements * Sizeof.FLOAT;
+		peakAllocatedBytes = Math.max(peakAllocatedBytes, allocatedBytes);
 		return new DeviceBuffer(pointer, elements);
 	}
 
@@ -688,6 +800,7 @@ public final class CudaBackend implements Backend {
 			return;
 		}
 		JCuda.cudaFree(buffer.pointer);
+		allocatedBytes -= (long) buffer.elements * Sizeof.FLOAT;
 	}
 
 	private void cacheResult(float[][] matrix, DeviceBuffer buffer) {
@@ -697,7 +810,7 @@ public final class CudaBackend implements Backend {
 	}
 
 	private void putCached(float[][] matrix, DeviceBuffer buffer) {
-		while (cache.size() >= MAX_CACHED_MATRICES) evictOldest();
+		while (cache.size() >= matrixCacheLimit) evictOldest();
 		cache.put(matrix, buffer);
 		cacheOrder.addLast(matrix);
 	}
@@ -708,6 +821,7 @@ public final class CudaBackend implements Backend {
 	}
 
 	private void evictOldest() {
+		if(cacheEvictions++==0)System.err.println("Synapse CUDA: resident matrix cache is full; evicting/materializing buffers. Increase setMatrixCacheLimit or reduce model/workload. getCacheEvictions() reports further evictions.");
 		float[][] oldest = cacheOrder.pollFirst();
 		if (oldest == null) return;
 		DeviceBuffer buffer = cache.remove(oldest);
@@ -751,6 +865,7 @@ public final class CudaBackend implements Backend {
 
 	@Override
 	public synchronized void close() {
+		if(transformerOps!=null){transformerOps.close();transformerOps=null;}
 		if (closed) return;
 		for (Map.Entry<float[][], DeviceBuffer> entry : cache.entrySet()) {
 			DeviceBuffer buffer = entry.getValue();
@@ -777,6 +892,7 @@ public final class CudaBackend implements Backend {
 			kernelModule = null;
 		}
 		JCublas2.cublasDestroy(handle);
+		allocatedBytes = 0;
 		closed = true;
 	}
 }

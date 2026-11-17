@@ -262,3 +262,12 @@ NeuralNetwork loadedNetwork = NeuralNetwork.load("model.snn");
 ```
 
 CNN and pooling layers can be saved the same way as dense layers. Older dense-only `.snn` files are still supported.
+
+## GPT, Transformers, and Mixture-of-Experts
+
+Synapse also includes decoder-only `Transformer` models and reusable embedding,
+causal MHA/GQA/MQA, normalization, FFN, decoder, and MoE layers. See
+[TRANSFORMERS.md](TRANSFORMERS.md) for training, generation, configuration,
+serialization, working examples, and the current CPU/CUDA verification limits.
+The [benchmark suite](benchmarks/README.md) compares equivalent PyTorch workloads.
+CUDA transformer kernels are compiled but have not yet been verified on a GPU.
